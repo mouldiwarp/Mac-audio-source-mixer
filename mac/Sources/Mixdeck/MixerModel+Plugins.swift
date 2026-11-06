@@ -57,11 +57,17 @@ extension MixerModel {
                 plugins[s.id] = p
                 insertStatus[s.id] = .ok
                 placeInserts(now)
+                if let problem = p.stateProblem {
+                    report("\(s.name): its saved settings are damaged (\(problem)), so it started with its defaults. "
+                           + "The saved settings are kept until you open the plug-in.", key: "insert.state.\(s.id)")
+                }
                 if openEditor { showEditor(s.id) }
             } catch let e as PluginInstance.LoadError {
                 if case .notInstalled = e { insertStatus[s.id] = .missing } else { insertStatus[s.id] = .failed(e.description) }
+                appLog.error("plug-in \(s.name, privacy: .public) not loaded: \(e.description, privacy: .public)")
             } catch {
-                insertStatus[s.id] = .failed("\(error)")
+                insertStatus[s.id] = .failed(describe(error))
+                appLog.error("plug-in \(s.name, privacy: .public) not loaded: \(describe(error), privacy: .public)")
             }
         }
     }
@@ -82,6 +88,7 @@ extension MixerModel {
         placeInserts(t)                      // returns once the audio thread no longer uses it
         plugins.removeValue(forKey: id)?.dispose()
         insertStatus[id] = nil
+        clearNotice("insert.state.\(id)")
         scheduleSave()
     }
 
@@ -113,6 +120,7 @@ extension MixerModel {
 
     func showEditor(_ id: UUID) {
         guard let p = plugins[id], let t = target(of: id), let s = insertSettings(t).first(where: { $0.id == id }) else { return }
+        clearNotice("insert.state.\(id)")   // opening the editor ends keeping the damaged saved state
         let owner: String
         switch t {
         case .strip(let i): owner = settings.strips[i].name

@@ -52,6 +52,7 @@ static OSStatus locateChannel(AudioObjectID dev, AudioObjectPropertyScope scope,
     OSStatus st = AudioObjectGetPropertyDataSize(dev, &a, 0, NULL, &sz);
     if (st || sz == 0) { setErr(err, errLen, "device has no streams in this direction (%d)", st); return st ? st : -1; }
     AudioBufferList *abl = malloc(sz);
+    if (!abl) { setErr(err, errLen, "out of memory (%d)", -1); return -1; }
     st = AudioObjectGetPropertyData(dev, &a, 0, NULL, &sz, abl);
     if (st) { free(abl); setErr(err, errLen, "read stream configuration failed (%d)", st); return st; }
     UInt32 base = 0;
@@ -73,7 +74,10 @@ static OSStatus locateChannel(AudioObjectID dev, AudioObjectPropertyScope scope,
     if (AudioObjectGetPropertyDataSize(dev, &sa, 0, NULL, &sz) == noErr && sz > 0) {
         UInt32 count = sz / sizeof(AudioObjectID);
         AudioObjectID *streams = malloc(sz);
-        AudioObjectGetPropertyData(dev, &sa, 0, NULL, &sz, streams);
+        if (!streams) { setErr(err, errLen, "out of memory (%d)", -1); return -1; }
+        // The list can shrink between the two calls; only check what was returned.
+        if (AudioObjectGetPropertyData(dev, &sa, 0, NULL, &sz, streams) != noErr) sz = 0;
+        count = sz / sizeof(AudioObjectID);
         for (UInt32 i = 0; i < count; i++) {
             AudioObjectPropertyAddress fa = { kAudioStreamPropertyVirtualFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
             AudioStreamBasicDescription f; UInt32 fs = sizeof f;
@@ -433,7 +437,7 @@ Mixer *MixerCreate(AudioObjectID feed, uint32_t bufferFrames, char *err, size_t 
         gTicksToSec = (double)tb.numer / (double)tb.denom * 1e-9;
     }
     Mixer *m = calloc(1, sizeof *m);
-    if (!m) return NULL;
+    if (!m) { setErr(err, errLen, "out of memory (%d)", -1); return NULL; }
     m->feed = feed;
     m->bufferFrames = bufferFrames ? bufferFrames : 256;
     for (int s = 0; s < MIXER_MAX_STRIPS; s++) {
@@ -539,8 +543,9 @@ MixerInsert *MixerInsertCreate(MixerAURender render) {
     if (!render) return NULL;
     MixerInsert *ins = calloc(1, sizeof *ins);
     if (!ins) return NULL;
-    ins->render = Block_copy(render);
     ins->abl = calloc(1, offsetof(AudioBufferList, mBuffers) + 2 * sizeof(AudioBuffer));
+    if (!ins->abl) { free(ins); return NULL; }
+    ins->render = Block_copy(render);
     ins->abl->mNumberBuffers = 2;
     ins->abl->mBuffers[0].mNumberChannels = ins->abl->mBuffers[1].mNumberChannels = 1;
     MixerInsert *self = ins;

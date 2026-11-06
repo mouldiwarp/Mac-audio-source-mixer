@@ -82,7 +82,7 @@ final class RecordWriter: @unchecked Sendable {
                     let k = min(n, chunk)
                     for i in rings.indices {
                         let got = Int(StereoRingRead(rings[i], l, r, UInt32(k)))
-                        if let f = fs[i] { write(i, f, l, r, got) }
+                        if let f = fs[i], isOpen(i) { write(i, f, l, r, got) }
                     }
                     lock.lock(); written += Int64(k); lock.unlock()
                     n -= k
@@ -100,6 +100,9 @@ final class RecordWriter: @unchecked Sendable {
         done.signal()
     }
 
+    /// False once the track failed (its file was dropped).
+    private func isOpen(_ i: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return files[i] != nil }
+
     private func write(_ i: Int, _ f: AVAudioFile, _ l: UnsafeMutablePointer<Float>, _ r: UnsafeMutablePointer<Float>, _ n: Int) {
         guard n > 0,
               let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: AVAudioFrameCount(n)),
@@ -112,7 +115,13 @@ final class RecordWriter: @unchecked Sendable {
             ch[1].update(from: r, count: n)
         }
         do { try f.write(from: buf) } catch {
-            lock.lock(); writeError = "write failed: \(error.localizedDescription)"; files[i] = nil; lock.unlock()
+            lock.lock()
+            // That track stops; the others go on. With no track left, the recording stops (spec §1).
+            files[i] = nil
+            let allFailed = files.allSatisfy { $0 == nil }
+            writeError = "\(names[i]): write failed: \(describe(error))" + (allFailed ? "; recording stopped" : "")
+            if allFailed, mode == .recording || mode == .paused { mode = .stopping }
+            lock.unlock()
         }
     }
 }

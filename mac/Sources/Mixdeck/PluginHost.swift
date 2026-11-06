@@ -52,6 +52,9 @@ final class PluginInstance {
     let insert: OpaquePointer
     var window: NSWindow?
     private var windowDelegate: WindowDelegate?
+    /// Set when the saved state could not be decoded. The plug-in then runs with its defaults,
+    /// and the saved state is kept in the settings until the user opens the editor.
+    private(set) var stateProblem: String?
 
     private init(au: AUAudioUnit, insert: OpaquePointer) { self.au = au; self.insert = insert }
 
@@ -74,37 +77,62 @@ final class PluginInstance {
         au.inputBusses[0].isEnabled = true
         au.outputBusses[0].isEnabled = true
         let render = au.renderBlock
-        do { try au.allocateRenderResources() } catch { throw LoadError.failed("could not start: \(error.localizedDescription)") }
-        if let data = s.state,
-           let st = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
-            au.fullState = st
+        do { try au.allocateRenderResources() } catch { throw LoadError.failed("could not start: \(describe(error))") }
+        var stateProblem: String?
+        if let data = s.state {
+            do {
+                guard let st = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+                    throw LoadError.failed("not a dictionary")
+                }
+                au.fullState = st
+            } catch {
+                stateProblem = describe(error)
+            }
         }
         // AURenderBlock and MixerAURender are both blocks with the same signature.
-        guard let ins = MixerInsertCreate(unsafeBitCast(render, to: MixerAURender.self)) else { throw LoadError.failed("out of memory") }
+        guard let ins = MixerInsertCreate(unsafeBitCast(render, to: MixerAURender.self)) else {
+            au.deallocateRenderResources()
+            throw LoadError.failed("out of memory")
+        }
         let p = PluginInstance(au: au, insert: ins)
+        p.stateProblem = stateProblem
         MixerInsertSetBypass(ins, s.bypass)
         return p
     }
 
-    /// Current state as a binary property list.
+    /// Current state as a binary property list; nil while a damaged saved state is being kept.
     var stateData: Data? {
-        guard let st = au.fullState else { return nil }
-        return try? PropertyListSerialization.data(fromPropertyList: st, format: .binary, options: 0)
+        guard stateProblem == nil, let st = au.fullState else { return nil }
+        do {
+            return try PropertyListSerialization.data(fromPropertyList: st, format: .binary, options: 0)
+        } catch {
+            appLog.error("plug-in state not saved: \(describe(error), privacy: .public)")
+            return nil
+        }
     }
 
     /// Call after the instance was removed from its engine slot.
     func dispose() {
+        windowDelegate?.onClose = nil      // the slot is gone; nothing to save
         window?.close()
+        window?.contentViewController = nil
         window = nil
         au.deallocateRenderResources()
         MixerInsertDestroy(insert)
     }
 
+    /// The editor window is created once and kept (hidden) after the user closes it: some AUv2
+    /// plug-ins (e.g. IK Multimedia / JUCE) return a view only on the first `requestViewController`.
     func showEditor(title: String, onClose: @escaping () -> Void) {
-        if let w = window { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        stateProblem = nil          // the user is editing: from now on save what the plug-in has
+        if let w = window {
+            w.title = title
+            windowDelegate?.onClose = onClose
+            w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return
+        }
         au.requestViewController { [weak self] vc in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.window == nil else { return }
                 let controller: NSViewController
                 if let vc {
                     controller = vc
@@ -116,7 +144,7 @@ final class PluginInstance {
                 w.title = title
                 w.styleMask.insert(.closable)
                 w.isReleasedWhenClosed = false
-                let d = WindowDelegate { [weak self] in self?.window = nil; onClose() }
+                let d = WindowDelegate(onClose)
                 w.delegate = d
                 self.windowDelegate = d
                 self.window = w
@@ -128,9 +156,9 @@ final class PluginInstance {
     }
 
     private final class WindowDelegate: NSObject, NSWindowDelegate {
-        let onClose: () -> Void
+        var onClose: (() -> Void)?
         init(_ onClose: @escaping () -> Void) { self.onClose = onClose }
-        func windowWillClose(_ notification: Notification) { onClose() }
+        func windowWillClose(_ notification: Notification) { onClose?() }
     }
 }
 
@@ -149,7 +177,7 @@ struct GenericPluginView: View {
                         Text(p.displayName).frame(width: 160, alignment: .leading)
                         Slider(value: Binding(get: { Double(p.value) }, set: { p.value = AUValue($0); tick += 1 }),
                                in: Double(p.minValue)...Double(max(p.maxValue, p.minValue + 0.0001)))
-                        Text(p.string(fromValue: nil)).font(.caption.monospacedDigit()).frame(width: 80, alignment: .trailing)
+                        Text(Self.valueText(p)).font(.caption.monospacedDigit()).frame(width: 80, alignment: .trailing)
                     }
                 }
             }
@@ -157,5 +185,13 @@ struct GenericPluginView: View {
             .id(tick)
         }
         .frame(minWidth: 460, minHeight: 200)
+    }
+
+    /// Always pass the value explicitly: with a nil pointer the AUv2 bridge hands the plug-in a
+    /// NULL value, which some plug-ins (JUCE-based ones) dereference and crash on.
+    static func valueText(_ p: AUParameter) -> String {
+        var v = p.value
+        if p.flags.contains(.flag_ValuesHaveStrings) { return p.string(fromValue: &v) }
+        return String(format: "%.2f", v)
     }
 }

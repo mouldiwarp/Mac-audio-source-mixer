@@ -50,13 +50,13 @@ struct RecorderBar: View {
                 Section("Buses") {
                     ForEach(0..<6, id: \.self) { b in
                         Toggle(AppSettings.busNames[b], isOn: Binding(get: { model.settings.recorder.armBuses[b] },
-                                                                      set: { try? model.setArm(bus: true, b, $0) }))
+                                                                      set: { v in model.attempt("Arm \(AppSettings.busNames[b])", key: "arm") { try model.setArm(bus: true, b, v) } }))
                     }
                 }
                 Section("Strips (post-fader)") {
                     ForEach(Array(model.settings.strips.enumerated()), id: \.element.id) { i, s in
                         Toggle(s.name, isOn: Binding(get: { model.settings.recorder.armStrips[i] },
-                                                     set: { try? model.setArm(bus: false, i, $0) }))
+                                                     set: { v in model.attempt("Arm \(s.name)", key: "arm") { try model.setArm(bus: false, i, v) } }))
                     }
                 }
             } label: {
@@ -123,7 +123,7 @@ struct ScenesMenu: View {
         Menu("Scenes") {
             let names = model.settings.scenes.keys.sorted()
             if names.isEmpty { Text("No scenes yet") }
-            ForEach(names, id: \.self) { n in Button("Load “\(n)”") { try? model.loadScene(n) } }
+            ForEach(names, id: \.self) { n in Button("Load “\(n)”") { model.attempt("Scene “\(n)”", key: "scene") { try model.loadScene(n) } } }
             Divider()
             Button("Save current mix as…") { naming = true }
             if !names.isEmpty {

@@ -13,6 +13,8 @@ Status: Phase 5 (owner-selected subset). Written 2026-11-06. This is our own des
 - **Persistence:** the plug-in's identity (type, subtype, manufacturer), its name, the bypass flag, and its full state.
   - The state is saved when the plug-in window closes, at quit, and with every settings save.
   - A plug-in that is no longer installed leaves its slot marked "missing" and passes audio through unchanged.
+  - If the saved state is damaged (it can't be decoded), the plug-in loads with its own defaults and a notice says so (`mixer.md`, Problems and notices). The saved state is kept in the settings (not replaced by the defaults) until the user opens the plug-in's window.
+  - A plug-in that fails while loading leaves its slot marked "failed" with the reason, and passes audio through unchanged.
 - **Real-time safety:** a plug-in renders on the mixer's audio thread.
   - If it returns an error, the slot passes audio through unchanged for that cycle, and the error is counted and shown.
   - Plug-in latency is shown in the slot. It is not compensated, so other strips are not delayed to match.

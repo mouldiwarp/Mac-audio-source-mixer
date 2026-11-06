@@ -126,12 +126,45 @@ struct AppSettings: Codable {
         return dir.appendingPathComponent("settings.json")
     }
 
-    static func load() -> AppSettings {
-        guard let data = try? Data(contentsOf: fileURL),
-              var s = try? JSONDecoder().decode(AppSettings.self, from: data) else { return AppSettings() }
-        if s.buses.count != 6 { s.buses = Array(repeating: BusSetting(), count: 6) }
-        for i in s.strips.indices where s.strips[i].assign.count != 6 { s.strips[i].assign = [false, false, false, true, false, false] }
-        return s
+    struct LoadResult {
+        var settings: AppSettings
+        /// Why the file could not be used, for a notice; nil when all is well.
+        var problem: String?
+        /// False if a damaged file could not be set aside: saving would destroy it.
+        var canSave = true
+    }
+
+    /// Loads the settings file (spec/features/mixer.md, Persistence). A file that cannot be
+    /// read is renamed to `settings.damaged-<date>.json` first, so the next save can't overwrite it.
+    /// `setAsideDamaged: false` leaves the file alone (preview mode) and disables saving.
+    static func load(setAsideDamaged: Bool = true) -> LoadResult {
+        let url = fileURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return LoadResult(settings: AppSettings()) }
+        do {
+            let data = try Data(contentsOf: url)
+            var s = try JSONDecoder().decode(AppSettings.self, from: data)
+            if s.buses.count != 6 { s.buses = Array(repeating: BusSetting(), count: 6) }
+            for i in s.strips.indices where s.strips[i].assign.count != 6 { s.strips[i].assign = [false, false, false, true, false, false] }
+            return LoadResult(settings: s)
+        } catch {
+            let reason = describe(error)
+            guard setAsideDamaged else {
+                return LoadResult(settings: AppSettings(), problem: "Settings could not be read (\(reason)).", canSave: false)
+            }
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd-HHmmss"
+            let kept = url.deletingLastPathComponent().appendingPathComponent("settings.damaged-\(f.string(from: Date())).json")
+            do {
+                try FileManager.default.moveItem(at: url, to: kept)
+                return LoadResult(settings: AppSettings(),
+                                  problem: "Settings could not be read (\(reason)). Mixdeck started with defaults; the old file was kept as \(kept.lastPathComponent).")
+            } catch {
+                return LoadResult(settings: AppSettings(),
+                                  problem: "Settings could not be read (\(reason)) or set aside (\(describe(error))). Changes will not be saved until settings.json is fixed or removed.",
+                                  canSave: false)
+            }
+        }
     }
 
     func save() throws {
