@@ -24,6 +24,9 @@ Status: Phase 4. Written 2026-11-06. This is our own design. From the Windows or
 - **Timer stop:** off (default), or stop after 1–600 minutes.
 - **Recording never touches the audio thread's timing.** The audio thread copies samples into a ring, and a background writer drains it. If the writer falls more than 4 s behind, samples are dropped and counted, and the UI shows a warning.
 - **The UI shows:** elapsed time, the armed items, and an error if a file cannot be created.
+  - If any file of a recording can't be created, no recording starts, and files already created for it are deleted.
+  - If writing to a track fails during a recording, that track stops and the others continue. The error is shown and posted as a notice. If every track has failed, the recording stops.
+  - If memory for an armed item's ring can't be allocated, that item is not recorded and a notice says so.
 
 ## 2. File player
 - A strip source **Audio file** plays a file through the strip's whole chain: FX, gain and routing. Any number of strips can play files.

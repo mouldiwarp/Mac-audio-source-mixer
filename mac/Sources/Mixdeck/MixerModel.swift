@@ -21,7 +21,9 @@ final class MixerModel: ObservableObject {
     @Published private(set) var busFx: [FxMeters] = Array(repeating: FxMeters(), count: 6)
     @Published private(set) var stripUnderruns: [UInt64] = Array(repeating: 0, count: Int(MIXER_MAX_STRIPS))
     @Published private(set) var busStatus: [String?] = [nil, nil, nil]
+    /// Engine state only (driver missing, engine not running); other problems are `notices`.
     @Published var engineError: String?
+    @Published var notices: [Notice] = []
     @Published private(set) var load: Double = 0
     @Published private(set) var inputs: [AudioDevice] = []
     @Published private(set) var outputs: [AudioDevice] = []
@@ -62,13 +64,18 @@ final class MixerModel: ObservableObject {
     private var saveWork: DispatchWorkItem?
     private var meterTimer: Timer?
     private var deviceListener: AudioObjectPropertyListenerBlock?
+    /// False when a damaged settings file could not be set aside (saving would destroy it).
+    private var canSave = true
 
     /// `--snapshot <dir>`: render the UI with the saved settings and sample meter levels,
     /// without starting the engine, opening devices or saving anything.
     static let isPreview = CommandLine.arguments.contains("--snapshot")
 
     init() {
-        settings = AppSettings.load()
+        let loaded = AppSettings.load(setAsideDamaged: !Self.isPreview)
+        settings = loaded.settings
+        canSave = loaded.canSave && !Self.isPreview
+        if let problem = loaded.problem { report(problem, key: "settings.load") }
         if Self.isPreview { fillPreviewState(); return }
         refreshDevices()
         startEngine()
@@ -97,8 +104,16 @@ final class MixerModel: ObservableObject {
         for i in settings.strips.indices { applyStrip(i) }
         for b in 0..<6 { applyBus(b) }
         loadAllInserts()
-        if MixerStart(m) != noErr { engineError = "Engine failed to start (feed device)" }
+        startMixer()
         rearmRecorder()
+    }
+
+    /// Starts (or retries starting) the feed device's I/O.
+    private func startMixer() {
+        guard let m = mixer else { return }
+        let st = MixerStart(m)
+        engineError = st == noErr ? nil : "Engine failed to start: the Mixdeck feed device would not start (OSStatus \(st)). Mixdeck retries when audio devices change."
+        if st != noErr { appLog.error("MixerStart failed: \(st)") }
     }
 
     private func fillPreviewState() {
@@ -342,12 +357,17 @@ final class MixerModel: ObservableObject {
             Task { @MainActor in self?.devicesChanged() }
         }
         deviceListener = block
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main, block)
+        let st = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main, block)
+        if st != noErr {
+            report("Mixdeck can't watch for audio devices being connected (OSStatus \(st)). Restart Mixdeck after plugging devices in or out.",
+                   key: "devices.listen")
+        }
     }
 
     private func devicesChanged() {
         refreshDevices()
         if mixer == nil { startEngine(); return }
+        if engineError != nil { startMixer() }
         // Reconnect anything that was missing.
         for (i, s) in settings.strips.enumerated() where status[s.id] == .missing { attachSource(i) }
         for b in 0..<3 where busStatus[b] == "missing" { attachBusDevice(b) }
@@ -391,24 +411,33 @@ final class MixerModel: ObservableObject {
     }
 
     func saveNow() {
+        guard canSave else { return }
         captureInsertStates()
-        try? settings.save()
+        do {
+            try settings.save()
+            clearNotice("settings.save")
+        } catch {
+            report("Settings could not be saved: \(describe(error))", key: "settings.save")
+        }
     }
 
     /// Makes the system login item match the setting (e.g. after the app was reinstalled).
     private func syncLoginItem() {
         let enabled = SMAppService.mainApp.status == .enabled
-        if settings.launchAtLogin && !enabled { try? SMAppService.mainApp.register() }
-        if !settings.launchAtLogin && enabled { try? SMAppService.mainApp.unregister() }
+        attempt("Launch at login", key: "login") {
+            if settings.launchAtLogin && !enabled { try SMAppService.mainApp.register() }
+            if !settings.launchAtLogin && enabled { try SMAppService.mainApp.unregister() }
+        }
     }
 
     func setLaunchAtLogin(_ on: Bool) {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             settings.launchAtLogin = on
+            clearNotice("login")
         } catch {
             settings.launchAtLogin = SMAppService.mainApp.status == .enabled
-            engineError = "Launch at login: \(error.localizedDescription)"
+            report("Launch at login: \(describe(error))", key: "login")
         }
         scheduleSave()
     }

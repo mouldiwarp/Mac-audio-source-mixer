@@ -44,7 +44,7 @@ struct MenuBarContent: View {
         }
         if !model.settings.scenes.isEmpty {
             Menu("Load Scene") {
-                ForEach(model.settings.scenes.keys.sorted(), id: \.self) { n in Button(n) { try? model.loadScene(n) } }
+                ForEach(model.settings.scenes.keys.sorted(), id: \.self) { n in Button(n) { model.attempt("Scene “\(n)”", key: "scene") { try model.loadScene(n) } } }
             }
         }
         SettingsLink { Text("Settings…") }

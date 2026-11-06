@@ -8,6 +8,9 @@ struct MixerView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let err = model.engineError { banner(err, color: Theme.danger) }
+            ForEach(model.notices) { n in
+                banner(n.message, color: Theme.warn, dismiss: { model.dismissNotice(n.id) })
+            }
             if !model.microphoneAuthorized {
                 banner("Mixdeck needs Microphone access to read input devices.", color: Theme.warn,
                        action: ("Allow…", { model.requestMicrophone() }))
@@ -73,12 +76,19 @@ struct MixerView: View {
         .overlay(alignment: .top) { Rectangle().fill(Theme.gold.opacity(0.4)).frame(height: 1) }
     }
 
-    private func banner(_ text: String, color: Color, action: (String, () -> Void)? = nil) -> some View {
+    private func banner(_ text: String, color: Color, action: (String, () -> Void)? = nil,
+                        dismiss: (() -> Void)? = nil) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
-            Text(text).lineLimit(2)
+            Text(text).lineLimit(3).help(text).textSelection(.enabled)
             Spacer()
             if let action { Button(action.0, action: action.1) }
+            if let dismiss {
+                Button(action: dismiss) { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                    .accessibilityLabel("Dismiss")
+            }
         }
         .font(.callout)
         .foregroundStyle(.black)

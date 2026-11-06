@@ -50,15 +50,20 @@ extension MixerModel {
         var stripRings = [OpaquePointer?](repeating: nil, count: 8)
         var busRings = [OpaquePointer?](repeating: nil, count: 6)
         var tracks: [(String, OpaquePointer)] = []
+        var failed: [String] = []
         for i in 0..<min(8, settings.strips.count) where r.armStrips[i] {
-            guard let ring = StereoRingCreate(cap) else { continue }
+            guard let ring = StereoRingCreate(cap) else { failed.append(settings.strips[i].name); continue }
             stripRings[i] = ring
             tracks.append((settings.strips[i].name, ring))
         }
         for b in 0..<6 where r.armBuses[b] {
-            guard let ring = StereoRingCreate(cap) else { continue }
+            guard let ring = StereoRingCreate(cap) else { failed.append(AppSettings.busNames[b]); continue }
             busRings[b] = ring
             tracks.append((AppSettings.busNames[b], ring))
+        }
+        if failed.isEmpty { clearNotice("recorder.rings") } else {
+            report("Not enough memory to record \(failed.joined(separator: ", ")); \(failed.count == 1 ? "it is" : "they are") not recorded.",
+                   key: "recorder.rings")
         }
         let w = RecordWriter(tracks: tracks, preRecordSeconds: r.preRecordSeconds, mono: r.mono)
         w.onStopped = { [weak self] in
@@ -96,6 +101,7 @@ extension MixerModel {
         }
         let r = settings.recorder
         let dir = URL(fileURLWithPath: (r.directory as NSString).expandingTildeInPath, isDirectory: true)
+        var created: [URL] = []
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let base = RecorderSettings.baseName(prefix: r.prefix)
@@ -104,14 +110,22 @@ extension MixerModel {
                 let safe = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
                 let file = w.names.count > 1 ? "\(base) - \(safe)" : base
                 let url = dir.appendingPathComponent(file).appendingPathExtension(r.fileExtension)
+                guard !FileManager.default.fileExists(atPath: url.path) else {
+                    throw ControlError("\(url.lastPathComponent) already exists")
+                }
                 files.append(try AVAudioFile(forWriting: url, settings: r.fileSettings, commonFormat: .pcmFormatFloat32, interleaved: false))
-                if files.count == 1 { lastRecording = url }
+                created.append(url)
             }
             w.start(files: files)
+            lastRecording = created.first
             recorderState = .recording
             recElapsed = 0
+            clearNotice("recorder.write")
         } catch {
-            recError = "Cannot create the recording: \(error.localizedDescription)"
+            // All tracks or none: remove the files this attempt already created (spec §1).
+            for url in created { try? FileManager.default.removeItem(at: url) }
+            recError = "Cannot create the recording: \(describe(error))"
+            appLog.error("recording not started: \(describe(error), privacy: .public)")
         }
     }
 
@@ -145,8 +159,10 @@ extension MixerModel {
             NSWorkspace.shared.activateFileViewerSelecting([last])
         } else {
             let dir = URL(fileURLWithPath: (settings.recorder.directory as NSString).expandingTildeInPath)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(dir)
+            attempt("Recordings folder", key: "recorder.folder") {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                if !NSWorkspace.shared.open(dir) { throw ControlError("cannot open \(dir.path)") }
+            }
         }
     }
 
@@ -164,7 +180,7 @@ extension MixerModel {
                 if limit > 0, recElapsed >= Double(limit * 60) { stopRecording() }
             }
             if w.dropped != recDropped { recDropped = w.dropped }
-            if let e = w.error, recError != e { recError = e }
+            if let e = w.error, recError != e { recError = e; report("Recording: \(e)", key: "recorder.write") }
         }
     }
 
@@ -233,6 +249,7 @@ extension MixerModel {
             }
             return try router.get(path)
         } catch {
+            appLog.info("OSC \(m.address, privacy: .public) ignored: \(describe(error), privacy: .public)")
             return nil
         }
     }
@@ -248,18 +265,23 @@ extension MixerModel {
             return
         }
         for m in settings.midiMappings where m.channel == e.channel && m.kind == e.kind && m.number == e.number {
-            guard let path = try? ControlPath.parse(m.path), let kind = try? router.kind(path) else { continue }
-            switch (e.kind, kind) {
-            case (.cc, .bool): try? router.set(path, .number(e.value >= 64 ? 1 : 0))
-            case (.cc, .number(let r, let gain)):
-                let f = Double(e.value) / 127
-                let v = gain ? Double(FaderLaw.dB(f)) : r.lowerBound + f * (r.upperBound - r.lowerBound)
-                try? router.set(path, .number(v))
-            case (.note, .bool):
-                if m.momentary { try? router.set(path, .number(e.isNoteOff ? 0 : 1)) }
-                else if !e.isNoteOff { try? router.toggle(path) }
-            case (.note, .number(let r, _)): if !e.isNoteOff { try? router.set(path, .number(r.upperBound)) }
-            default: break
+            do {
+                let path = try ControlPath.parse(m.path)
+                switch (e.kind, try router.kind(path)) {
+                case (.cc, .bool): try router.set(path, .number(e.value >= 64 ? 1 : 0))
+                case (.cc, .number(let r, let gain)):
+                    let f = Double(e.value) / 127
+                    let v = gain ? Double(FaderLaw.dB(f)) : r.lowerBound + f * (r.upperBound - r.lowerBound)
+                    try router.set(path, .number(v))
+                case (.note, .bool):
+                    if m.momentary { try router.set(path, .number(e.isNoteOff ? 0 : 1)) }
+                    else if !e.isNoteOff { try router.toggle(path) }
+                case (.note, .number(let r, _)): if !e.isNoteOff { try router.set(path, .number(r.upperBound)) }
+                default: break
+                }
+            } catch {
+                // A mapping to a strip that no longer exists, etc. Not a notice: MIDI can repeat many times a second.
+                appLog.info("MIDI mapping \(m.path, privacy: .public) ignored: \(describe(error), privacy: .public)")
             }
         }
     }
@@ -293,7 +315,7 @@ extension MixerModel {
             case .scene(let n): try loadScene(n)
             }
         } catch {
-            engineError = "Shortcut \(k.display): \(error)"
+            report("Shortcut \(k.display): \(describe(error))", key: "hotkey.\(k.id)")
         }
     }
 }

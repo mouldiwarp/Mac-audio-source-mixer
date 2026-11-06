@@ -46,6 +46,17 @@ Peak level per strip (post-fader) and per bus, in dBFS, updated about 20 times a
 ## Persistence
 - Settings are a JSON file at `~/Library/Application Support/Mixdeck/settings.json`. It is written on every change, debounced to 0.5 s, and loaded at launch.
 - Devices are stored by UID and apps by bundle ID. A device missing at launch leaves its strip in place, marked "missing", and the strip reconnects when the device returns.
+- **No file:** the app starts with defaults.
+- **Unreadable or damaged file:** the app starts with defaults, but first renames the file to `settings.damaged-<YYYY-MM-DD-HHMMSS>.json` in the same folder, so the next save can't overwrite it. A notice says so and names the kept file.
+- **Save fails** (disk full, permissions): a notice shows the reason. It clears by itself on the next successful save. The settings in memory stay as they are.
+
+## Problems and notices
+- **Engine state** (driver missing, engine can't start) is a fixed red banner at the top of the mixer window. It stays until the engine is running.
+- **Everything else** that fails because of a user action or in the background (a shortcut, a scene, launch at login, saving settings, the recorder, a plug-in that can't restore its settings) is a **notice**: a banner under the engine banner, with a close button.
+  - The same problem reported again doesn't add a second banner. It replaces the first one.
+  - At most 4 notices are shown. Older ones are dropped.
+  - Problems on one strip, bus or insert also stay next to that item (as before).
+- Every notice and every error that is otherwise only counted (MIDI and OSC messages that don't match a control) is also written to the system log, subsystem `local.mixdeck.app`.
 
 ## App shell
 - A mixer window with one column per strip and a bus section.
