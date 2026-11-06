@@ -52,6 +52,18 @@ Colours, fonts and surfaces are in `Sources/Mixdeck/Style.swift`; the controls a
 
 Settings: `~/Library/Application Support/Mixdeck/settings.json`.
 
+## Using the mix in Google Meet (and other browser calls)
+Chrome lists the buses as ordinary microphones: `Mixer B1 (Virtual)`, `Mixer B2 (Virtual)` and `Mixer B3 (Virtual)`, at 48 kHz stereo. Checked 2026-11-06 in Chrome on meet.google.com.
+1. In Mixdeck, assign what people should hear to B1. Strips go to B1 by default.
+2. In Meet, open ⋮ → Settings → Audio → Microphone, and choose **Mixer B1 (Virtual)**. Meet keeps using its default microphone (e.g. a webcam) until you change this, and may switch back if that device is unplugged.
+3. If no microphones appear, turn on Google Chrome in System Settings → Privacy & Security → Microphone.
+
+Things to watch:
+- Keep any strip carrying Chrome or System audio off B1. Otherwise the people on the call hear themselves back. Send it to an A bus (your headphones) instead.
+- Meet runs its own noise cancellation, echo cancellation and automatic level control on the microphone. Turn off Settings → Audio → Noise cancellation for music. The level control can't be turned off.
+- Meet sends the microphone in mono, so pan doesn't carry to the call.
+- Use B2 or B3 for a second mix, e.g. speech-only for the call and a full mix for a recording.
+
 ## Known limits
 - The app is ad-hoc signed, so macOS may ask for Microphone and System Audio Recording permission again after each rebuild (permission is tied to the exact build). A stable signing identity would stop that.
 - App sources are matched by bundle ID when the strip is set. An app started later needs the strip re-selected.
