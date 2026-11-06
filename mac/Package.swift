@@ -11,7 +11,7 @@ let package = Package(
     targets: [
         // Real-time audio path (C: no Swift runtime on the audio threads).
         .target(name: "CMixEngine",
-                linkerSettings: [.linkedFramework("AudioToolbox"), .linkedFramework("CoreAudio")]),
+                linkerSettings: [.linkedFramework("AudioToolbox"), .linkedFramework("CoreAudio"), .linkedFramework("Accelerate")]),
         // Core Audio device discovery (non-real-time).
         .target(name: "AudioIO",
                 linkerSettings: [.linkedFramework("CoreAudio")]),

@@ -3,8 +3,10 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-static int failures = 0;
+int failures = 0;
+void runFxTests(void);
 #define CHECK(c, ...) do { printf((c) ? "ok   " : "FAIL "); printf(__VA_ARGS__); printf("\n"); if (!(c)) failures++; } while (0)
 
 // Simulates a producer and a consumer on independent clocks.
@@ -92,8 +94,13 @@ static void drift_case(const char *name, double inRate, double outRate, double p
     drift_case_j(name, inRate, outRate, ppm, inChunk, outChunk, seconds, 0);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     srand(1);
+    runFxTests();
+    if (argc > 1 && strcmp(argv[1], "fx") == 0) {   // voice chain only (fast)
+        printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+        return failures ? 1 : 0;
+    }
     drift_case("44.1k USB mic, fast clock", 44100, 48000, +200, 512, 256, 120);
     drift_case("48k webcam, slow clock", 48000, 48000, -150, 480, 256, 120);
     drift_case("96k interface", 96000, 48000, +80, 1024, 256, 120);

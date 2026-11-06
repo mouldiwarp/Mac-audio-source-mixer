@@ -1,12 +1,15 @@
 # Mixdeck (macOS)
 
-A multi-source mixer with three virtual microphones ("Mixer B1", "Mixer B2" and "Mixer B3") and three hardware output buses. Specs: `../spec/features/mixer.md` and `../spec/features/virtual-devices.md`.
+A multi-source mixer with three virtual microphones ("Mixer B1", "Mixer B2" and "Mixer B3") and three hardware output buses. Specs: `../spec/features/mixer.md`, `../spec/features/virtual-devices.md` and `../spec/features/voice-dsp.md`.
+
+Each strip has an **FX** button that opens its voice chain: denoiser, gate, 3-band EQ, 6-band parametric EQ, compressor with transfer curve, and limiter, plus presets. Each bus has an **FX** button for its parametric EQ, limiter and Stereo/Mono mode.
 
 ## Layout
 - `Driver/`: the AudioServerPlugIn (C). `make` builds it, and `make test` runs the in-process driver tests.
 - `Sources/CMixEngine`: the real-time engine (C).
   - `AdaptiveRing`: clock-drift compensation, an adaptive windowed-sinc resampler with a PI controller.
   - `Mixer`: 8 strips × 6 buses, driven by the virtual driver's clock.
+  - `VoiceFx`: the per-strip and per-bus processing chain.
 - `Sources/AudioIO`: device discovery and process taps for system and app audio (Swift).
 - `Sources/Mixdeck`: the SwiftUI app (mixer window, menu-bar item, settings, launch at login).
 - `Sources/mixdeck-cli`: a command-line front end for tests and soak runs.
@@ -15,9 +18,9 @@ A multi-source mixer with three virtual microphones ("Mixer B1", "Mixer B2" and 
 
 ## Build and install
     make -C Driver && make -C Driver test        # driver + its tests
-    swift build -c release && .build/release/cmix-tests
+    swift build -c release && .build/release/cmix-tests   # 'cmix-tests fx' = voice chain only (seconds)
     sudo scripts/install-driver.sh               # restarts coreaudiod
-    scripts/build-app.sh && open build/Mixdeck.app
+    scripts/install-app.sh [--launch-at-login]   # builds, installs to /Applications, opens
 
 ## Command-line checks
     .build/debug/mixdeck-cli list

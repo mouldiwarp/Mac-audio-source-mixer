@@ -182,8 +182,9 @@ typedef struct {
     _Atomic float gainDB, pan;
     _Atomic bool mono, mute, solo;
     _Atomic uint32_t assign;      // bit per bus
+    FxChain *fx;
     // real-time state
-    float curGL, curGR;
+    float curG, curPL, curPR;
     // stats
     _Atomic uint32_t peakL, peakR; // float bits
 } Strip;
@@ -192,6 +193,7 @@ typedef struct {
     _Atomic float gainDB;
     _Atomic bool mute;
     _Atomic(Sink *) sink;         // A buses only
+    FxChain *fx;
     float curGain;
     _Atomic uint32_t peakL, peakR;
 } Bus;
@@ -275,14 +277,19 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
         if (atomic_load_explicit(&st->mono, memory_order_relaxed))
             for (UInt32 i = 0; i < frames; i++) m->sl[i] = m->sr[i] = 0.5f * (m->sl[i] + m->sr[i]);
 
+        // source -> mono -> voice chain -> fader -> limiter -> pan (spec/features/voice-dsp.md)
+        FxChainProcessPre(st->fx, m->sl, m->sr, frames);
         bool silent = atomic_load_explicit(&st->mute, memory_order_relaxed) ||
                       (anySolo && !atomic_load_explicit(&st->solo, memory_order_relaxed));
-        float g = silent ? 0.0f : dbToLin(atomic_load_explicit(&st->gainDB, memory_order_relaxed));
-        float pl, pr;
-        panGains(atomic_load_explicit(&st->pan, memory_order_relaxed), &pl, &pr);
-        float tl = g * pl, tr = g * pr;
-        float dl = (tl - st->curGL) * inv, dr = (tr - st->curGR) * inv;   // ramp over this cycle
-        float gl = st->curGL, gr = st->curGR, mxl = 0, mxr = 0;
+        float tg = silent ? 0.0f : dbToLin(atomic_load_explicit(&st->gainDB, memory_order_relaxed));
+        float dg = (tg - st->curG) * inv, g = st->curG;     // ramp over this cycle
+        for (UInt32 i = 0; i < frames; i++) { g += dg; m->sl[i] *= g; m->sr[i] *= g; }
+        st->curG = tg;
+        FxChainProcessPost(st->fx, m->sl, m->sr, frames);
+        float tl, tr;
+        panGains(atomic_load_explicit(&st->pan, memory_order_relaxed), &tl, &tr);
+        float dl = (tl - st->curPL) * inv, dr = (tr - st->curPR) * inv;
+        float gl = st->curPL, gr = st->curPR, mxl = 0, mxr = 0;
         for (UInt32 i = 0; i < frames; i++) {
             gl += dl; gr += dr;
             m->sl[i] *= gl; m->sr[i] *= gr;
@@ -290,7 +297,7 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
             if (al > mxl) mxl = al;
             if (ar > mxr) mxr = ar;
         }
-        st->curGL = tl; st->curGR = tr;
+        st->curPL = tl; st->curPR = tr;
         peakStore(&st->peakL, mxl);
         peakStore(&st->peakR, mxr);
 
@@ -308,10 +315,13 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
                      : dbToLin(atomic_load_explicit(&bs->gainDB, memory_order_relaxed));
         float g = bs->curGain, dg = (target - g) * inv, mxl = 0, mxr = 0;
         float *al = m->acc[b][0], *ar = m->acc[b][1];
+        // bus sum -> EQ -> gain -> limiter -> mode -> soft clip
+        FxChainProcessPre(bs->fx, al, ar, frames);
+        for (UInt32 i = 0; i < frames; i++) { g += dg; al[i] *= g; ar[i] *= g; }
+        FxChainProcessPost(bs->fx, al, ar, frames);
         for (UInt32 i = 0; i < frames; i++) {
-            g += dg;
-            al[i] = softClip(al[i] * g);
-            ar[i] = softClip(ar[i] * g);
+            al[i] = softClip(al[i]);
+            ar[i] = softClip(ar[i]);
             float x = fabsf(al[i]), y = fabsf(ar[i]);
             if (x > mxl) mxl = x;
             if (y > mxr) mxr = y;
@@ -347,6 +357,11 @@ static void waitForCycle(Mixer *m) {
     for (int i = 0; i < 200 && atomic_load(&m->cycles) < c0 + 2; i++) usleep(1000);
 }
 
+static void MixerFreeChains(Mixer *m) {
+    for (int s = 0; s < MIXER_MAX_STRIPS; s++) { FxChainDestroy(m->strip[s].fx); m->strip[s].fx = NULL; }
+    for (int b = 0; b < MIXER_NUM_BUSES; b++) { FxChainDestroy(m->bus[b].fx); m->bus[b].fx = NULL; }
+}
+
 Mixer *MixerCreate(AudioObjectID feed, uint32_t bufferFrames, char *err, size_t errLen) {
     if (gTicksToSec == 0) {
         mach_timebase_info_data_t tb;
@@ -361,13 +376,21 @@ Mixer *MixerCreate(AudioObjectID feed, uint32_t bufferFrames, char *err, size_t 
         atomic_init(&m->strip[s].gainDB, 0.0f);
         atomic_init(&m->strip[s].pan, 0.0f);
         atomic_init(&m->strip[s].assign, 1u << MIXER_BUS_B1);
+        m->strip[s].fx = FxChainCreate(MIX_RATE);
+        m->strip[s].curPL = m->strip[s].curPR = 1.0f;
     }
-    for (int b = 0; b < MIXER_NUM_BUSES; b++) { atomic_init(&m->bus[b].gainDB, 0.0f); m->bus[b].curGain = 1.0f; }
+    for (int b = 0; b < MIXER_NUM_BUSES; b++) {
+        atomic_init(&m->bus[b].gainDB, 0.0f);
+        m->bus[b].curGain = 1.0f;
+        m->bus[b].fx = FxChainCreate(MIX_RATE);
+    }
+    for (int s = 0; s < MIXER_MAX_STRIPS; s++) if (!m->strip[s].fx) { setErr(err, errLen, "out of memory (%d)", -1); MixerFreeChains(m); free(m); return NULL; }
+    for (int b = 0; b < MIXER_NUM_BUSES; b++) if (!m->bus[b].fx) { setErr(err, errLen, "out of memory (%d)", -1); MixerFreeChains(m); free(m); return NULL; }
 
-    if (deviceRate(feed) != MIX_RATE) { setErr(err, errLen, "feed device is not at 48 kHz (%d)", -1); free(m); return NULL; }
+    if (deviceRate(feed) != MIX_RATE) { setErr(err, errLen, "feed device is not at 48 kHz (%d)", -1); MixerFreeChains(m); free(m); return NULL; }
     setBufferFrames(feed, m->bufferFrames);
     OSStatus st = AudioDeviceCreateIOProcID(feed, masterIOProc, m, &m->proc);
-    if (st) { setErr(err, errLen, "create feed IOProc failed (%d)", st); free(m); return NULL; }
+    if (st) { setErr(err, errLen, "create feed IOProc failed (%d)", st); MixerFreeChains(m); free(m); return NULL; }
     return m;
 }
 
@@ -388,6 +411,7 @@ void MixerDestroy(Mixer *m) {
     AudioDeviceDestroyIOProcID(m->feed, m->proc);
     for (int s = 0; s < MIXER_MAX_STRIPS; s++) sourceDestroy(atomic_exchange(&m->strip[s].src, NULL));
     for (int b = 0; b < MIXER_NUM_HW_BUSES; b++) sinkDestroy(atomic_exchange(&m->bus[b].sink, NULL));
+    MixerFreeChains(m);
     free(m);
 }
 
@@ -446,6 +470,13 @@ void MixerStripSetAssign(Mixer *m, int s, int b, bool on) {
     if (on) atomic_fetch_or(&m->strip[s].assign, 1u << b);
     else atomic_fetch_and(&m->strip[s].assign, ~(1u << b));
 }
+void MixerStripSetFx(Mixer *m, int s, const FxParams *p) { if (validStrip(s) && p) FxChainSetParams(m->strip[s].fx, p); }
+void MixerBusSetFx(Mixer *m, int b, const FxParams *p) {
+    if (!validBus(b) || !p) return;
+    FxParams q = *p;   // buses use EQ, limiter and mode only
+    q.denoise.on = q.gate.on = q.eq3.on = q.comp.on = false;
+    FxChainSetParams(m->bus[b].fx, &q);
+}
 void MixerBusSetGainDB(Mixer *m, int b, float dB) { if (validBus(b)) atomic_store(&m->bus[b].gainDB, fmaxf(-60.0f, fminf(12.0f, dB))); }
 void MixerBusSetMute(Mixer *m, int b, bool on)    { if (validBus(b)) atomic_store(&m->bus[b].mute, on); }
 
@@ -494,6 +525,7 @@ void MixerGetStats(Mixer *m, MixerStats *out) {
         MixerChannelStats *c = &out->strip[s];
         c->peakL = peakTake(&m->strip[s].peakL);
         c->peakR = peakTake(&m->strip[s].peakR);
+        FxChainGetMeters(m->strip[s].fx, &c->fx);
         Source *src = atomic_load(&m->strip[s].src);
         c->attached = src != NULL;
         if (src && src->ring) ringStats(src->ring, c);
@@ -503,6 +535,7 @@ void MixerGetStats(Mixer *m, MixerStats *out) {
         MixerChannelStats *c = &out->bus[b];
         c->peakL = peakTake(&m->bus[b].peakL);
         c->peakR = peakTake(&m->bus[b].peakR);
+        FxChainGetMeters(m->bus[b].fx, &c->fx);
         if (b < MIXER_NUM_HW_BUSES) {
             Sink *k = atomic_load(&m->bus[b].sink);
             c->attached = k != NULL;

@@ -107,6 +107,7 @@ struct StripView: View {
     let strip: StripSetting
     let index: Int
     var width: CGFloat = StripLayout.fullWidth
+    @State private var showFx = false
 
     var body: some View {
         let meter = model.stripMeters[index]
@@ -117,6 +118,7 @@ struct StripView: View {
                 .multilineTextAlignment(.center)
             SourcePicker(strip: strip)
             statusLine
+            fxRow
             HStack(alignment: .bottom, spacing: 6) {
                 MeterView(l: meter.l, r: meter.r)
                 Fader(dB: Binding(get: { strip.gainDB }, set: { v in model.update(strip.id) { $0.gainDB = v } }))
@@ -146,6 +148,26 @@ struct StripView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.strip))
         .contextMenu {
             Button("Remove strip", role: .destructive) { model.removeStrip(strip.id) }
+        }
+    }
+
+    /// FX button plus the gate and compressor indicators.
+    private var fxRow: some View {
+        let fx = strip.fx, m = model.stripFx[index]
+        return HStack(spacing: 5) {
+            LatchButton(title: "FX", on: fx.anyStripBlockOn) { showFx.toggle() }
+                .frame(width: 34)
+                .help("Voice processing: denoiser, gate, EQ, compressor, limiter")
+                .popover(isPresented: $showFx, arrowEdge: .trailing) {
+                    StripFxEditor(stripID: strip.id, index: index).environmentObject(model)
+                }
+            Circle()
+                .fill(!fx.gateOn ? Color(white: 0.3) : m.gateOpen ? Theme.accent : Theme.danger)
+                .frame(width: 7, height: 7)
+                .help(fx.gateOn ? (m.gateOpen ? "Gate open" : "Gate closed") : "Gate off")
+                .accessibilityLabel(fx.gateOn ? (m.gateOpen ? "Gate open" : "Gate closed") : "Gate off")
+            ReductionBar(dB: fx.compOn ? m.compGainReductionDB : 0)
+                .help(String(format: "Compressor reduction %.1f dB", m.compGainReductionDB))
         }
     }
 
@@ -231,6 +253,7 @@ struct BusSection: View {
 struct BusView: View {
     @EnvironmentObject var model: MixerModel
     let bus: Int
+    @State private var showFx = false
 
     var body: some View {
         let s = model.settings.buses[bus]
@@ -260,6 +283,9 @@ struct BusView: View {
             Text(FaderLaw.label(s.gainDB)).font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
             LatchButton(title: "M", on: s.mute, tint: Theme.danger) { model.updateBus(bus) { $0.mute.toggle() } }
                 .accessibilityLabel("Mute \(AppSettings.busNames[bus])")
+            LatchButton(title: s.fx.monoOut ? "FX·MONO" : "FX", on: s.fx.anyBusBlockOn) { showFx.toggle() }
+                .accessibilityLabel("Processing for \(AppSettings.busNames[bus])")
+                .popover(isPresented: $showFx, arrowEdge: .leading) { BusFxEditor(bus: bus).environmentObject(model) }
         }
         .padding(6)
         .frame(width: 78)

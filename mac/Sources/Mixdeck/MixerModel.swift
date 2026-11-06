@@ -17,6 +17,8 @@ final class MixerModel: ObservableObject {
     @Published private(set) var status: [UUID: StripStatus] = [:]
     @Published private(set) var stripMeters: [Meter] = Array(repeating: Meter(), count: Int(MIXER_MAX_STRIPS))
     @Published private(set) var busMeters: [Meter] = Array(repeating: Meter(), count: 6)
+    @Published private(set) var stripFx: [FxMeters] = Array(repeating: FxMeters(), count: Int(MIXER_MAX_STRIPS))
+    @Published private(set) var busFx: [FxMeters] = Array(repeating: FxMeters(), count: 6)
     @Published private(set) var stripUnderruns: [UInt64] = Array(repeating: 0, count: Int(MIXER_MAX_STRIPS))
     @Published private(set) var busStatus: [String?] = [nil, nil, nil]
     @Published private(set) var engineError: String?
@@ -80,6 +82,8 @@ final class MixerModel: ObservableObject {
         MixerStripSetMute(m, Int32(i), s.mute)
         MixerStripSetSolo(m, Int32(i), s.solo)
         for b in 0..<6 { MixerStripSetAssign(m, Int32(i), Int32(b), s.assign[b]) }
+        var fx = s.fx.cParams
+        MixerStripSetFx(m, Int32(i), &fx)
         attachSource(i)
     }
 
@@ -147,6 +151,24 @@ final class MixerModel: ObservableObject {
         MixerStripSetMute(m, Int32(i), s.mute)
         MixerStripSetSolo(m, Int32(i), s.solo)
         for b in 0..<6 { MixerStripSetAssign(m, Int32(i), Int32(b), s.assign[b]) }
+        var fx = s.fx.cParams
+        MixerStripSetFx(m, Int32(i), &fx)
+        scheduleSave()
+    }
+
+    // MARK: Presets
+
+    func applyPreset(_ id: UUID, _ preset: FxSetting) { update(id) { $0.fx = preset.stripPreset } }
+
+    func savePreset(_ name: String, from id: UUID) {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, let i = index(id) else { return }
+        settings.userPresets[name] = settings.strips[i].fx.stripPreset
+        scheduleSave()
+    }
+
+    func deletePreset(_ name: String) {
+        settings.userPresets[name] = nil
         scheduleSave()
     }
 
@@ -167,6 +189,8 @@ final class MixerModel: ObservableObject {
         let s = settings.buses[b]
         MixerBusSetGainDB(m, Int32(b), s.gainDB)
         MixerBusSetMute(m, Int32(b), s.mute)
+        var fx = s.fx.cParams
+        MixerBusSetFx(m, Int32(b), &fx)
         if b < 3 { attachBusDevice(b) }
     }
 
@@ -198,6 +222,8 @@ final class MixerModel: ObservableObject {
         change(&settings.buses[b])
         MixerBusSetGainDB(m, Int32(b), settings.buses[b].gainDB)
         MixerBusSetMute(m, Int32(b), settings.buses[b].mute)
+        var fx = settings.buses[b].fx.cParams
+        MixerBusSetFx(m, Int32(b), &fx)
         scheduleSave()
     }
 
@@ -255,7 +281,18 @@ final class MixerModel: ObservableObject {
         stripMeters = zip(stripMeters, strips).map { Meter(l: max($1.peakL, $0.l * fall), r: max($1.peakR, $0.r * fall)) }
         busMeters = zip(busMeters, buses).map { Meter(l: max($1.peakL, $0.l * fall), r: max($1.peakR, $0.r * fall)) }
         stripUnderruns = strips.map(\.underruns)
+        // Indicators: hold the gain-reduction peak and let it fall back gently.
+        stripFx = zip(stripFx, strips).map { old, new in smoothFx(old, new.fx) }
+        busFx = zip(busFx, buses).map { old, new in smoothFx(old, new.fx) }
         load = s.load
+    }
+
+    private func smoothFx(_ old: FxMeters, _ new: FxMeters) -> FxMeters {
+        var m = new
+        m.compGainReductionDB = max(new.compGainReductionDB, old.compGainReductionDB - 1.5)
+        m.limiterGainReductionDB = max(new.limiterGainReductionDB, old.limiterGainReductionDB - 1.5)
+        m.compInputDB = max(new.compInputDB, old.compInputDB - 1.5)
+        return m
     }
 
     // MARK: Persistence and login item

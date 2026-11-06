@@ -150,6 +150,22 @@ case "selftest":
     check(peaks[2] < 0.0001, "Mixer B3 silent: \(dB(peaks[2])) dBFS")
     for i in 1...3 { check(st[i].underruns <= 1, "capture of Mixer B\(i): underruns \(st[i].underruns), drift \(String(format: "%.1f", st[i].ratioPPM)) ppm") }
     check(s.load < 0.25, "mix load \(String(format: "%.1f", s.load * 100))% of the cycle")
+
+    // Voice chain in the live engine: +12 dB fader into a -6 dBFS limiter on the
+    // tone strip, mono-mode B2. The B2 mic must peak at the ceiling, not above.
+    var fx = FxParams()
+    FxParamsDefault(&fx)
+    fx.limiter = FxLimiter(on: true, ceilingDB: -6, releaseMs: 100)
+    MixerStripSetFx(mixer, 0, &fx)
+    MixerStripSetGainDB(mixer, 0, 12)
+    Thread.sleep(forTimeInterval: 0.5)
+    _ = stats()
+    Thread.sleep(forTimeInterval: 2)
+    let s2 = stats()
+    let st2 = strips(s2)
+    let b2 = max(st2[2].peakL, st2[2].peakR)
+    check(abs(20 * log10(b2) + 6) < 0.1, "limiter in the engine: +12 dB into a -6 dBFS ceiling -> B2 peak \(dB(b2)) dBFS")
+    check(abs(st2[0].fx.limiterGainReductionDB - 6) < 0.2, String(format: "limiter meter shows %.1f dB reduction (expected 6)", st2[0].fx.limiterGainReductionDB))
     MixerDestroy(mixer)
     print(failures == 0 ? "PASSED" : "FAILED (\(failures))")
     if peaks.allSatisfy({ $0 < 0.0001 }) { print("note: all mics silent; the terminal may lack Microphone permission") }

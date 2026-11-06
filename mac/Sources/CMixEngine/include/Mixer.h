@@ -10,6 +10,7 @@
 #define MIXER_H
 
 #include <CoreAudio/CoreAudio.h>
+#include "VoiceFx.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -27,6 +28,7 @@ typedef struct {
     double ratioPPM;           // drift correction in use
     bool attached;             // has a source (strip) or device (A bus)
     bool running;              // audio flowing (false while priming)
+    FxMeters fx;               // voice chain indicators (spec/features/voice-dsp.md)
 } MixerChannelStats;
 
 typedef struct {
@@ -58,6 +60,11 @@ void MixerStripSetMono(Mixer *m, int strip, bool on);
 void MixerStripSetMute(Mixer *m, int strip, bool on);
 void MixerStripSetSolo(Mixer *m, int strip, bool on);
 void MixerStripSetAssign(Mixer *m, int strip, int bus, bool on);
+
+// Voice chain (spec/features/voice-dsp.md). Strip: every block. Bus: the
+// parametric EQ, limiter and monoOut are used; the other blocks are ignored.
+void MixerStripSetFx(Mixer *m, int strip, const FxParams *p);
+void MixerBusSetFx(Mixer *m, int bus, const FxParams *p);
 
 // Bus controls.
 void MixerBusSetGainDB(Mixer *m, int bus, float dB);
