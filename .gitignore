@@ -8,3 +8,9 @@ build/
 *.xcworkspace/xcuserdata/
 .build/
 .swiftpm/
+
+
+# Compiled spike artifacts (rebuild from source)
+mac/spikes/driver_signing/check_driver
+mac/spikes/driver_signing/VirtualMixerTest.driver/Contents/MacOS/
+mac/spikes/driver_signing/VirtualMixerTest.driver/Contents/_CodeSignature/
