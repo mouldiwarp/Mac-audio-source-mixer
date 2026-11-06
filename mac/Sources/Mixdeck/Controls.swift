@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Fader position (0...1) <-> dB. Top 70 % of travel covers -20...+12 dB.
@@ -20,6 +21,7 @@ struct Fader: View {
     @Binding var dB: Float
     var tint: Color = Theme.accent
     @State private var dragStart: Double?
+    @State private var clicks = DoubleClick()
 
     private static let capH: CGFloat = 30
 
@@ -53,17 +55,40 @@ struct Fader: View {
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
                     if dragStart == nil { dragStart = p }
+                    guard g.translation.height != 0 else { return }   // a click alone doesn't move it
                     let np = (dragStart ?? p) - Double(g.translation.height / max(travel, 1))
                     dB = (FaderLaw.dB(np) * 10).rounded() / 10
                 }
-                .onEnded { _ in dragStart = nil })
-            .onTapGesture(count: 2) { dB = 0 }
+                .onEnded { g in
+                    dragStart = nil
+                    if clicks.isDoubleClick(g) { dB = 0 }
+                })
         }
         .frame(width: 36)
+        .help("Gain (double-click for 0 dB)")
         .accessibilityElement()
         .accessibilityLabel("Gain")
         .accessibilityValue(FaderLaw.label(dB) + " dB")
         .accessibilityAdjustableAction { dir in dB = min(12, max(-60, dB + (dir == .increment ? 1 : -1))) }
+    }
+}
+
+/// Recognises a double-click from the ends of a zero-distance drag gesture, which would
+/// otherwise swallow the clicks before a tap gesture sees them.
+struct DoubleClick {
+    private var lastClick: Date?
+
+    /// Call from the drag's `onEnded`. True on the second click of a double-click.
+    mutating func isDoubleClick(_ g: DragGesture.Value) -> Bool {
+        let moved = abs(g.translation.width) > 3 || abs(g.translation.height) > 3
+        guard !moved else { lastClick = nil; return false }
+        let now = Date()
+        if let last = lastClick, now.timeIntervalSince(last) <= NSEvent.doubleClickInterval {
+            lastClick = nil
+            return true
+        }
+        lastClick = now
+        return false
     }
 }
 
@@ -175,6 +200,7 @@ struct LampFace: View {
 struct PanControl: View {
     @Binding var pan: Float
     @State private var dragStart: Float?
+    @State private var clicks = DoubleClick()
 
     var body: some View {
         GeometryReader { geo in
@@ -204,11 +230,14 @@ struct PanControl: View {
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
                     if dragStart == nil { dragStart = pan }
+                    guard g.translation.width != 0 else { return }
                     let v = (dragStart ?? pan) + Float(g.translation.width / max(usable, 1)) * 2
                     pan = (min(1, max(-1, v)) * 100).rounded() / 100
                 }
-                .onEnded { _ in dragStart = nil })
-            .onTapGesture(count: 2) { pan = 0 }
+                .onEnded { g in
+                    dragStart = nil
+                    if clicks.isDoubleClick(g) { pan = 0 }
+                })
         }
         .frame(height: 16)
         .help("Pan (double-click to centre)")
