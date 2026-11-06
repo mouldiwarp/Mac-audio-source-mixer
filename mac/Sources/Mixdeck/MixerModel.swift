@@ -41,6 +41,15 @@ final class MixerModel: ObservableObject {
     @Published var lastMidi: String = "—"
     @Published var controlStatus: [String: String] = [:]
     @Published var hotkeyFailures: Set<UUID> = []
+    // Phase 5 subset (spec/features/plugins-and-balance.md); logic in MixerModel+Plugins.swift.
+    enum InsertStatus: Equatable { case loading, ok, missing, failed(String) }
+    struct BalanceResult: Equatable { var name: String; var measured: Double?; var newGain: Float?; var clamped = false }
+    enum BalanceState: Equatable { case idle, measuring(Double), done([BalanceResult]) }
+    @Published var insertStatus: [UUID: InsertStatus] = [:]
+    @Published var insertErrors: [UUID: UInt64] = [:]
+    @Published var balanceState = BalanceState.idle
+    var balanceUndo: [UUID: Float] = [:]
+    var plugins: [UUID: PluginInstance] = [:]
     var players: [Int: FilePlayer] = [:]
     var writer: RecordWriter?
     var api: ApiServer?
@@ -82,6 +91,7 @@ final class MixerModel: ObservableObject {
         engineError = nil
         for i in settings.strips.indices { applyStrip(i) }
         for b in 0..<6 { applyBus(b) }
+        loadAllInserts()
         if MixerStart(m) != noErr { engineError = "Engine failed to start (feed device)" }
         rearmRecorder()
     }
@@ -92,6 +102,8 @@ final class MixerModel: ObservableObject {
         saveNow()
         if let m = mixer { MixerDestroy(m) }
         mixer = nil
+        plugins.values.forEach { $0.dispose() }
+        plugins.removeAll()
         writer?.shutdown(); writer = nil
         taps.removeAll()
         players.removeAll()
@@ -110,6 +122,7 @@ final class MixerModel: ObservableObject {
         for b in 0..<6 { MixerStripSetAssign(m, Int32(i), Int32(b), s.assign[b]) }
         var fx = s.fx.cParams
         MixerStripSetFx(m, Int32(i), &fx)
+        placeInserts(.strip(i))
         attachSource(i)
     }
 
@@ -169,7 +182,11 @@ final class MixerModel: ObservableObject {
             return
         }
         // Engine slots follow array order: detach everything from idx on, then re-apply.
-        for i in idx..<settings.strips.count { MixerStripDetach(m, Int32(i)); taps[i] = nil; players[i] = nil }
+        for i in idx..<settings.strips.count {
+            MixerStripDetach(m, Int32(i)); taps[i] = nil; players[i] = nil
+            for k in 0..<Int(MIXER_INSERT_SLOTS) { MixerStripSetInsert(m, Int32(i), Int32(k), nil) }
+        }
+        for ins in settings.strips[idx].inserts { plugins.removeValue(forKey: ins.id)?.dispose(); insertStatus[ins.id] = nil }
         settings.strips.remove(at: idx)
         playerInfo[id] = nil
         // Arms follow strip positions.
@@ -244,6 +261,7 @@ final class MixerModel: ObservableObject {
         MixerBusSetMute(m, Int32(b), s.mute)
         var fx = s.fx.cParams
         MixerBusSetFx(m, Int32(b), &fx)
+        placeInserts(.bus(b))
         if b < 3 { attachBusDevice(b) }
     }
 
@@ -358,7 +376,10 @@ final class MixerModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
-    func saveNow() { try? settings.save() }
+    func saveNow() {
+        captureInsertStates()
+        try? settings.save()
+    }
 
     /// Makes the system login item match the setting (e.g. after the app was reinstalled).
     private func syncLoginItem() {

@@ -10,8 +10,10 @@
 #define MIXER_H
 
 #include <CoreAudio/CoreAudio.h>
+#include <AudioToolbox/AUComponent.h>
 #include "VoiceFx.h"
 #include "StereoRing.h"
+#include "Loudness.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -81,6 +83,30 @@ OSStatus MixerBusSetDevice(Mixer *m, int bus, AudioObjectID device, char *err, s
 // cycles, from the moment the set is installed. Pass NULL arrays to remove.
 // Rings are not owned; the previous set is no longer used when this returns.
 void MixerSetCaptures(Mixer *m, StereoRing *const strips[MIXER_MAX_STRIPS], StereoRing *const buses[MIXER_NUM_BUSES]);
+
+// ---- Plug-in inserts (spec/features/plugins-and-balance.md §1) ------------------
+// The render and pull-input blocks have the same ABI as AUAudioUnit's
+// AURenderBlock / AURenderPullInputBlock, so the app passes au.renderBlock.
+#define MIXER_INSERT_SLOTS 4
+typedef OSStatus (^MixerAUPullInput)(AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts,
+                                     uint32_t frames, long bus, AudioBufferList *input);
+typedef OSStatus (^MixerAURender)(AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts,
+                                  uint32_t frames, long bus, AudioBufferList *output, MixerAUPullInput pull);
+typedef struct MixerInsert MixerInsert;
+MixerInsert *MixerInsertCreate(MixerAURender render);
+void MixerInsertDestroy(MixerInsert *ins);        // only after it was removed from its slot
+void MixerInsertSetBypass(MixerInsert *ins, bool bypass);
+uint64_t MixerInsertErrors(MixerInsert *ins);
+int32_t MixerInsertLastError(MixerInsert *ins);     // last failing render status (diagnostics)
+uint64_t MixerInsertPulls(MixerInsert *ins);        // input pulls so far (diagnostics)
+// Puts ins (or NULL) into a slot. When this returns, the previous occupant is no
+// longer used by the audio thread and may be destroyed.
+void MixerStripSetInsert(Mixer *m, int strip, int slot, MixerInsert *ins);
+void MixerBusSetInsert(Mixer *m, int bus, int slot, MixerInsert *ins);
+
+// ---- Loudness (spec/features/plugins-and-balance.md §2) ---------------------------
+// Pre-fader 100 ms K-weighted blocks of a strip; see LoudnessBlocks().
+uint32_t MixerStripLoudnessBlocks(Mixer *m, int strip, float *out, uint32_t max, uint64_t since, uint64_t *total);
 
 // Peaks reset on each call.
 void MixerGetStats(Mixer *m, MixerStats *out);

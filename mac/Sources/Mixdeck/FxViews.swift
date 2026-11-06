@@ -163,6 +163,9 @@ struct StripFxEditor: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 presets
+                if let i = model.settings.strips.firstIndex(where: { $0.id == stripID }) {
+                    InsertsSection(target: .strip(i))
+                }
                 FxSection(title: "Denoiser", isOn: bind(\.denoiseOn)) {
                     ParamSlider(title: "Amount", value: Binding(get: { fx.denoiseAmount * 100 },
                                                                set: { v in model.update(stripID) { $0.fx.denoiseAmount = v / 100 } }),
@@ -273,6 +276,7 @@ struct BusFxEditor: View {
                 .pickerStyle(.segmented).frame(width: 150)
             }
             FxSection(title: "Parametric EQ", isOn: bind(\.peqOn)) { PeqEditor(bands: bind(\.peq)) }
+            InsertsSection(target: .bus(bus))
             FxSection(title: "Limiter (after bus gain)", isOn: bind(\.limiterOn),
                       trailing: AnyView(Text(String(format: "GR %.1f dB", fx.limiterOn ? meters.limiterGainReductionDB : 0))
                                             .font(.caption.monospacedDigit()).foregroundStyle(Theme.warn))) {

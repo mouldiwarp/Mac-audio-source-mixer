@@ -51,6 +51,7 @@ struct MixerView: View {
             RecorderBar()
             Divider().frame(height: 18)
             ScenesMenu()
+            BalanceButton()
             Spacer()
             Text(String(format: "Engine load %.1f%%", model.load * 100)).foregroundStyle(Theme.dim)
             SettingsLink { Image(systemName: "gearshape") }
@@ -124,6 +125,12 @@ struct StripView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .semibold))
                     .multilineTextAlignment(.center)
+                Button { model.setBalanceSelected(strip.id, !strip.balanceSelected) } label: {
+                    Text("⚖").font(.system(size: 11)).foregroundStyle(strip.balanceSelected ? Theme.warn : Theme.dim)
+                }
+                .buttonStyle(.plain)
+                .help(strip.balanceSelected ? "In the level-balance group" : "Add to the level-balance group")
+                .accessibilityLabel(strip.balanceSelected ? "Remove from balance" : "Add to balance")
                 Button { model.removeStrip(strip.id) } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12))
                 }
@@ -142,6 +149,7 @@ struct StripView: View {
             }
             .frame(height: 210)
             Text(FaderLaw.label(strip.gainDB) + " dB").font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
+            if strip.balanceSelected { TrimRow(strip: strip) }
             Slider(value: Binding(get: { Double(strip.pan) }, set: { v in model.update(strip.id) { $0.pan = Float(v) } }), in: -1...1)
                 .controlSize(.mini)
                 .accessibilityLabel("Pan")
@@ -172,7 +180,7 @@ struct StripView: View {
     private var fxRow: some View {
         let fx = strip.fx, m = model.stripFx[index]
         return HStack(spacing: 5) {
-            LatchButton(title: "FX", on: fx.anyStripBlockOn) { showFx.toggle() }
+            LatchButton(title: "FX", on: fx.anyStripBlockOn || strip.inserts.contains { !$0.bypass }) { showFx.toggle() }
                 .frame(width: 34)
                 .help("Voice processing: denoiser, gate, EQ, compressor, limiter")
                 .popover(isPresented: $showFx, arrowEdge: .trailing) {
@@ -303,7 +311,7 @@ struct BusView: View {
             Text(FaderLaw.label(s.gainDB)).font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
             LatchButton(title: "M", on: s.mute, tint: Theme.danger) { model.updateBus(bus) { $0.mute.toggle() } }
                 .accessibilityLabel("Mute \(AppSettings.busNames[bus])")
-            LatchButton(title: s.fx.monoOut ? "FX·MONO" : "FX", on: s.fx.anyBusBlockOn) { showFx.toggle() }
+            LatchButton(title: s.fx.monoOut ? "FX·MONO" : "FX", on: s.fx.anyBusBlockOn || s.inserts.contains { !$0.bypass }) { showFx.toggle() }
                 .accessibilityLabel("Processing for \(AppSettings.busNames[bus])")
                 .popover(isPresented: $showFx, arrowEdge: .leading) { BusFxEditor(bus: bus).environmentObject(model) }
         }

@@ -98,6 +98,7 @@ int main(int argc, char **argv) {
     srand(1);
     runFxTests();
     void runRingTests(void); runRingTests();
+    void runLoudnessTests(void); runLoudnessTests();
     if (argc > 1 && strcmp(argv[1], "fx") == 0) {   // voice chain only (fast)
         printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
         return failures ? 1 : 0;

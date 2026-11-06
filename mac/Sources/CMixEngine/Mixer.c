@@ -2,12 +2,14 @@
 
 #include "Mixer.h"
 #include "AdaptiveRing.h"
+#include <Block.h>
 #include <mach/mach_time.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <unistd.h>
 
 #define MAXF        4096u
@@ -178,8 +180,23 @@ static void sinkDestroy(Sink *k) {
 
 // ---- Mixer ----------------------------------------------------------------------
 
+struct MixerInsert {
+    MixerAURender render;
+    MixerAUPullInput pull;
+    float *inL, *inR;             // current input (set by the audio thread before rendering)
+    double sampleTime;
+    _Atomic bool bypass;
+    _Atomic uint64_t errors;
+    _Atomic int32_t lastError;
+    _Atomic uint64_t pulls;
+    AudioBufferList *abl;         // 2 mono buffers
+    float outL[MAXF], outR[MAXF];
+};
+
 typedef struct {
     _Atomic(Source *) src;
+    _Atomic(MixerInsert *) ins[MIXER_INSERT_SLOTS];
+    LoudnessMeter loud;
     _Atomic float gainDB, pan;
     _Atomic bool mono, mute, solo;
     _Atomic uint32_t assign;      // bit per bus
@@ -195,6 +212,7 @@ typedef struct {
     _Atomic bool mute;
     _Atomic(Sink *) sink;         // A buses only
     FxChain *fx;
+    _Atomic(MixerInsert *) ins[MIXER_INSERT_SLOTS];
     float curGain;
     _Atomic uint32_t peakL, peakR;
 } Bus;
@@ -243,6 +261,31 @@ static void panGains(float pan, float *gl, float *gr) {
     double th = (pan + 1.0) * M_PI / 4.0;
     *gl = (float)fmin(1.0, M_SQRT2 * cos(th));
     *gr = (float)fmin(1.0, M_SQRT2 * sin(th));
+}
+
+static void runInserts(_Atomic(MixerInsert *) *slots, float *l, float *r, UInt32 frames, UInt64 hostTime) {
+    for (int k = 0; k < MIXER_INSERT_SLOTS; k++) {
+        MixerInsert *ins = atomic_load_explicit(&slots[k], memory_order_acquire);
+        if (!ins || atomic_load_explicit(&ins->bypass, memory_order_relaxed)) continue;
+        ins->inL = l; ins->inR = r;
+        AudioBufferList *abl = ins->abl;
+        abl->mBuffers[0].mData = ins->outL; abl->mBuffers[0].mDataByteSize = frames * 4;
+        abl->mBuffers[1].mData = ins->outR; abl->mBuffers[1].mDataByteSize = frames * 4;
+        AudioTimeStamp ts = { 0 };
+        ts.mSampleTime = ins->sampleTime;
+        ts.mHostTime = hostTime;
+        ts.mFlags = kAudioTimeStampSampleTimeValid | kAudioTimeStampHostTimeValid;
+        AudioUnitRenderActionFlags flags = 0;
+        OSStatus st = ins->render(&flags, &ts, frames, 0, abl, ins->pull);
+        ins->sampleTime += frames;
+        if (st != noErr || !abl->mBuffers[0].mData || !abl->mBuffers[1].mData) {   // pass through
+            atomic_fetch_add_explicit(&ins->errors, 1, memory_order_relaxed);
+            atomic_store_explicit(&ins->lastError, st ? (int32_t)st : -1, memory_order_relaxed);
+            continue;
+        }
+        if (abl->mBuffers[0].mData != l) memcpy(l, abl->mBuffers[0].mData, frames * sizeof(float));
+        if (abl->mBuffers[1].mData != r) memcpy(r, abl->mBuffers[1].mData, frames * sizeof(float));
+    }
 }
 
 static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, const AudioBufferList *in,
@@ -295,6 +338,8 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
 
         // source -> mono -> voice chain -> fader -> limiter -> pan (spec/features/voice-dsp.md)
         FxChainProcessPre(st->fx, m->sl, m->sr, frames);
+        runInserts(st->ins, m->sl, m->sr, frames, inNow->mHostTime);
+        LoudnessProcess(&st->loud, m->sl, m->sr, frames);   // pre-fader, for level balance
         bool silent = atomic_load_explicit(&st->mute, memory_order_relaxed) ||
                       (anySolo && !atomic_load_explicit(&st->solo, memory_order_relaxed));
         float tg = silent ? 0.0f : dbToLin(atomic_load_explicit(&st->gainDB, memory_order_relaxed));
@@ -334,6 +379,7 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
         float *al = m->acc[b][0], *ar = m->acc[b][1];
         // bus sum -> EQ -> gain -> limiter -> mode -> soft clip
         FxChainProcessPre(bs->fx, al, ar, frames);
+        runInserts(bs->ins, al, ar, frames, inNow->mHostTime);
         for (UInt32 i = 0; i < frames; i++) { g += dg; al[i] *= g; ar[i] *= g; }
         FxChainProcessPost(bs->fx, al, ar, frames);
         for (UInt32 i = 0; i < frames; i++) {
@@ -487,6 +533,61 @@ void MixerStripAttachRing(Mixer *m, int s, StereoRing *ring) {
     src->player = ring;
     MixerStripDetach(m, s);
     atomic_store_explicit(&m->strip[s].src, src, memory_order_release);
+}
+
+MixerInsert *MixerInsertCreate(MixerAURender render) {
+    if (!render) return NULL;
+    MixerInsert *ins = calloc(1, sizeof *ins);
+    if (!ins) return NULL;
+    ins->render = Block_copy(render);
+    ins->abl = calloc(1, offsetof(AudioBufferList, mBuffers) + 2 * sizeof(AudioBuffer));
+    ins->abl->mNumberBuffers = 2;
+    ins->abl->mBuffers[0].mNumberChannels = ins->abl->mBuffers[1].mNumberChannels = 1;
+    MixerInsert *self = ins;
+    ins->pull = Block_copy(^OSStatus(AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, uint32_t frames,
+                                     long bus, AudioBufferList *in) {
+        (void)flags; (void)ts; (void)bus;
+        atomic_fetch_add_explicit(&self->pulls, 1, memory_order_relaxed);
+        if (!in || frames > MAXF) return kAudio_ParamError;
+        float *src[2] = { self->inL, self->inR };
+        for (UInt32 b = 0; b < in->mNumberBuffers && b < 2; b++) {
+            if (in->mBuffers[b].mData == NULL) in->mBuffers[b].mData = src[b];   // host supplies the buffer
+            else if (in->mBuffers[b].mData != src[b]) memcpy(in->mBuffers[b].mData, src[b], frames * sizeof(float));
+            in->mBuffers[b].mDataByteSize = frames * sizeof(float);
+        }
+        return noErr;
+    });
+    return ins;
+}
+
+void MixerInsertDestroy(MixerInsert *ins) {
+    if (!ins) return;
+    Block_release(ins->render);
+    Block_release(ins->pull);
+    free(ins->abl);
+    free(ins);
+}
+
+void MixerInsertSetBypass(MixerInsert *ins, bool b) { if (ins) atomic_store(&ins->bypass, b); }
+uint64_t MixerInsertErrors(MixerInsert *ins) { return ins ? atomic_load(&ins->errors) : 0; }
+int32_t MixerInsertLastError(MixerInsert *ins) { return ins ? atomic_load(&ins->lastError) : 0; }
+uint64_t MixerInsertPulls(MixerInsert *ins) { return ins ? atomic_load(&ins->pulls) : 0; }
+
+void MixerStripSetInsert(Mixer *m, int s, int slot, MixerInsert *ins) {
+    if (!validStrip(s) || slot < 0 || slot >= MIXER_INSERT_SLOTS) return;
+    MixerInsert *old = atomic_exchange(&m->strip[s].ins[slot], ins);
+    if (old) waitForCycle(m);
+}
+
+void MixerBusSetInsert(Mixer *m, int b, int slot, MixerInsert *ins) {
+    if (!validBus(b) || slot < 0 || slot >= MIXER_INSERT_SLOTS) return;
+    MixerInsert *old = atomic_exchange(&m->bus[b].ins[slot], ins);
+    if (old) waitForCycle(m);
+}
+
+uint32_t MixerStripLoudnessBlocks(Mixer *m, int s, float *out, uint32_t max, uint64_t since, uint64_t *total) {
+    if (!validStrip(s)) return 0;
+    return LoudnessBlocks(&m->strip[s].loud, out, max, since, total);
 }
 
 void MixerSetCaptures(Mixer *m, StereoRing *const strips[MIXER_MAX_STRIPS], StereoRing *const buses[MIXER_NUM_BUSES]) {

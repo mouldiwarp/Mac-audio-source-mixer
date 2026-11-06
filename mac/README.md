@@ -4,6 +4,10 @@ A multi-source mixer with three virtual microphones ("Mixer B1", "Mixer B2" and 
 
 Each strip has an **FX** button that opens its voice chain: denoiser, gate, 3-band EQ, 6-band parametric EQ, compressor with transfer curve, and limiter, plus presets. Each bus has an **FX** button for its parametric EQ, limiter and Stereo/Mono mode.
 
+Plug-ins and balance (`../spec/features/plugins-and-balance.md`):
+- **Plug-ins:** add Audio Unit effects (T-RackS, AmpliTube, TONEX and so on) under **Plug-ins** in a strip's or bus's FX panel. There are 4 slots per strip or bus, each with Edit and bypass.
+- **Balance:** mark strips with ⚖, then press **⚖ Balance** in the footer to measure and match their loudness. The ± buttons under each fader add 1 dB trims, which are held through later balances.
+
 Phase 4 (`../spec/features/control-and-recording.md`):
 - **Recorder:** in the window footer. Arm buses and/or strips, then record; each armed item gets its own file.
 - **File player:** a strip source.

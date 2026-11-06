@@ -31,6 +31,11 @@ struct StripSetting: Codable, Identifiable, Hashable {
     var fx = FxSetting()
     /// File player strips only.
     var loop = false
+    /// Audio Unit inserts, in processing order (max 4).
+    var inserts: [InsertSetting] = []
+    /// Level balance (spec/features/plugins-and-balance.md §2).
+    var balanceSelected = false
+    var trimDB: Float = 0
 
     init(name: String, source: SourceSetting? = nil) { self.name = name; self.source = source }
 
@@ -42,6 +47,9 @@ struct StripSetting: Codable, Identifiable, Hashable {
         assign = c.get(.assign, [false, false, false, true, false, false])
         fx = c.get(.fx, FxSetting())
         loop = c.get(.loop, false)
+        inserts = c.get(.inserts, [])
+        balanceSelected = c.get(.balanceSelected, false)
+        trimDB = c.get(.trimDB, 0)
     }
 }
 
@@ -53,6 +61,7 @@ struct BusSetting: Codable, Hashable {
     var deviceName: String?
     /// Parametric EQ, limiter and mode (monoOut) only.
     var fx = FxSetting()
+    var inserts: [InsertSetting] = []
 
     init() {}
 
@@ -61,7 +70,21 @@ struct BusSetting: Codable, Hashable {
         gainDB = c.get(.gainDB, 0); mute = c.get(.mute, false)
         deviceUID = c.get(.deviceUID, nil); deviceName = c.get(.deviceName, nil)
         fx = c.get(.fx, FxSetting())
+        inserts = c.get(.inserts, [])
     }
+}
+
+/// One Audio Unit insert (spec/features/plugins-and-balance.md §1).
+struct InsertSetting: Codable, Hashable, Identifiable {
+    var id = UUID()
+    var type: UInt32
+    var subType: UInt32
+    var manufacturer: UInt32
+    var name: String
+    var vendor: String
+    var bypass = false
+    /// The plug-in's full state (property list), saved with the settings.
+    var state: Data?
 }
 
 struct AppSettings: Codable {
@@ -77,6 +100,7 @@ struct AppSettings: Codable {
     var midiMappings: [MidiMapping] = []
     var hotkeys: [Hotkey] = []
     var scenes: [String: MixScene] = [:]
+    var balanceSeconds = 8
 
     init() {}
 
@@ -93,6 +117,7 @@ struct AppSettings: Codable {
         midiMappings = c.get(.midiMappings, [])
         hotkeys = c.get(.hotkeys, [])
         scenes = c.get(.scenes, [:])
+        balanceSeconds = c.get(.balanceSeconds, 8)
     }
 
     static var fileURL: URL {

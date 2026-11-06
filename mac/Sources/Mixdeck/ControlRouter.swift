@@ -40,7 +40,7 @@ struct ControlError: Error, CustomStringConvertible {
 
 /// A parsed path, e.g. `Strip[0].Comp.Ratio` -> scope strip, index 0, key "comp.ratio".
 struct ControlPath: Hashable {
-    enum Scope: String { case strip, bus, recorder, scene }
+    enum Scope: String { case strip, bus, recorder, scene, balance }
     let scope: Scope
     let index: Int?
     let key: String          // lower-case, may itself contain "[n]" (recorder arms)
@@ -52,6 +52,7 @@ struct ControlPath: Hashable {
         case .bus: head = "Bus[\(index ?? 0)]"
         case .recorder: head = "Recorder"
         case .scene: head = "Scene"
+        case .balance: head = "Balance"
         }
         return head + "." + ControlRouter.displayKey(key)
     }
@@ -127,6 +128,7 @@ struct ControlRouter {
         "comp.makeup": n(\.fx.compMakeupDB, -12...24),
         "limiter.ceiling": n(\.fx.limiterCeilingDB, -24...0),
         "loop": b(\.loop),
+        "balance": b(\.balanceSelected),
     ]
 
     private struct BusParam {
@@ -159,10 +161,10 @@ struct ControlRouter {
         let order = ["gain", "pan", "mute", "solo", "mono", "a1", "a2", "a3", "b1", "b2", "b3",
                      "denoiser", "gate", "eq", "peq", "comp", "limiter",
                      "denoiser.amount", "gate.threshold", "eq.low", "eq.mid", "eq.high",
-                     "comp.threshold", "comp.ratio", "comp.makeup", "limiter.ceiling", "play", "loop"]
+                     "comp.threshold", "comp.ratio", "comp.makeup", "limiter.ceiling", "play", "loop", "balance", "trim"]
         for i in 0..<stripCount { for k in order { out.append("Strip[\(i)].\(displayKey(k))") } }
         for i in 0..<6 { for k in ["gain", "mute", "mono", "peq", "limiter"] { out.append("Bus[\(i)].\(displayKey(k))") } }
-        out += ["Recorder.Record", "Recorder.Pause"]
+        out += ["Recorder.Record", "Recorder.Pause", "Balance.Run"]
         out += (0..<stripCount).map { "Recorder.ArmStrip[\($0)]" } + (0..<6).map { "Recorder.ArmBus[\($0)]" }
         return out
     }
@@ -172,6 +174,8 @@ struct ControlRouter {
         case .strip:
             if p.key == "play" { return .bool }
             if p.key == "label" { return .string }
+            if p.key == "trim" { return .number(-24...24, gain: false) }
+            if p.key.hasPrefix("insert[") { return .string }
             guard let sp = Self.stripParams[p.key] else { throw ControlError("unknown strip parameter '\(p.key)'") }
             return sp.kind
         case .bus:
@@ -183,6 +187,9 @@ struct ControlRouter {
         case .scene:
             if ["load", "save"].contains(p.key) { return .string }
             throw ControlError("unknown scene parameter '\(p.key)'")
+        case .balance:
+            if p.key == "run" { return .bool }
+            throw ControlError("unknown balance parameter '\(p.key)'")
         }
     }
 
@@ -210,6 +217,11 @@ struct ControlRouter {
             let s = try strip(p)
             if p.key == "label" { return .string(s.name) }
             if p.key == "play" { return .number(model.isPlaying(s.id) ? 1 : 0) }
+            if p.key == "trim" { return .number(Double(s.trimDB)) }
+            if p.key.hasPrefix("insert["), p.key.hasSuffix("]"), let k = Int(p.key.dropFirst(7).dropLast()) {
+                guard s.inserts.indices.contains(k) else { return .string("empty") }
+                return .string(model.insertDescription(s.inserts[k]))
+            }
             guard let sp = Self.stripParams[p.key] else { throw ControlError("unknown strip parameter '\(p.key)'") }
             return .number(sp.get(s))
         case .bus:
@@ -228,6 +240,8 @@ struct ControlRouter {
             throw ControlError("unknown recorder parameter '\(p.key)'")
         case .scene:
             throw ControlError("Scene.\(Self.displayKey(p.key)) can only be set")
+        case .balance:
+            return .number(model.balanceState.isMeasuring ? 1 : 0)
         }
     }
 
@@ -241,6 +255,8 @@ struct ControlRouter {
         case .strip:
             let s = try strip(p)
             if p.key == "label", case .string(let name) = v { model.update(s.id) { $0.name = name }; return }
+            if p.key == "trim", let d = v.double { model.setTrim(s.id, Float(d)); return }
+            if p.key.hasPrefix("insert[") { throw ControlError("\(p.canonical) is read-only") }
             if p.key == "play" {
                 guard case .file = s.source else { throw ControlError("strip \(p.index!) is not a file player") }
                 v.bool ? model.play(s.id) : model.pause(s.id)
@@ -261,6 +277,8 @@ struct ControlRouter {
                 guard (0..<count).contains(a.index) else { throw ControlError("no such arm index") }
                 try model.setArm(bus: a.bus, a.index, v.bool)
             }
+        case .balance:
+            if v.bool { model.runBalance() }
         case .scene:
             guard case .string(let name) = v else { return }
             if p.key == "load" { try model.loadScene(name) } else { model.saveScene(name) }

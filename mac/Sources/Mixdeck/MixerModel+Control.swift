@@ -151,6 +151,7 @@ extension MixerModel {
     }
 
     func pollPhase4() {
+        pollInsertErrors()
         for (i, p) in players where i < settings.strips.count {
             let id = settings.strips[i].id
             let info = PlayerInfo(playing: p.isPlaying, position: p.position, duration: p.duration)

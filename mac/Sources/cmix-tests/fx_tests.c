@@ -349,3 +349,38 @@ void runRingTests(void) {
     CHECK(got == 0 && StereoRingAvailable(a) == 0 && !StereoRingFlushPending(a), "flush honoured by the consumer");
     StereoRingDestroy(a); StereoRingDestroy(b);
 }
+
+#include "Loudness.h"
+
+static double measure(double amp, double hz, double seconds, double silenceSeconds) {
+    static LoudnessMeter m;
+    memset(&m, 0, sizeof m);
+    LoudnessReset(&m);
+    float l[480], r[480];
+    size_t total = (size_t)((seconds + silenceSeconds) * FS);
+    for (size_t i = 0; i < total; i += 480) {
+        for (int j = 0; j < 480; j++) {
+            double t = (double)(i + j) / FS;
+            l[j] = r[j] = t < seconds ? (float)(amp * sin(2 * M_PI * hz * t)) : 0.0f;
+        }
+        LoudnessProcess(&m, l, r, 480);
+    }
+    float blocks[LOUD_RING_BLOCKS];
+    uint64_t tot;
+    uint32_t n = LoudnessBlocks(&m, blocks, LOUD_RING_BLOCKS, 0, &tot);
+    return LoudnessIntegrated(blocks, n);
+}
+
+// spec/features/plugins-and-balance.md, Acceptance 3.
+void runLoudnessTests(void) {
+    printf("-- loudness (BS.1770)\n");
+    double v = measure(0.1, 1000, 5, 0);
+    CHECK(fabs(v + 20) < 0.2, "1 kHz at -20 dBFS on both channels: %.2f LUFS (expected -20.0)", v);
+    double g = measure(0.1, 1000, 5, 20);
+    CHECK(fabs(g - v) < 0.2, "20 s of silence is gated out: %.2f LUFS (edge blocks count, per BS.1770)", g);
+    double lo = measure(0.0316, 1000, 5, 0);
+    CHECK(fabs((v - lo) - 10) < 0.05, "10 dB quieter reads 10 LU lower (%.2f)", v - lo);
+    double hf = measure(0.1, 4000, 5, 0);
+    CHECK(hf > v + 2 && hf < v + 5, "K-weighting lifts 4 kHz by %.2f dB", hf - v);
+    CHECK(isinf(measure(0.0001, 1000, 5, 0)), "below -70 LUFS: no signal");
+}
