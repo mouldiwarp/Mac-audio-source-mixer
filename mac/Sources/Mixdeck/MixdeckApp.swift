@@ -17,6 +17,10 @@ struct MixdeckApp: App {
         MenuBarExtra("Mixdeck", systemImage: "slider.vertical.3") {
             MenuBarContent().environmentObject(model)
         }
+
+        Settings {
+            ControlSettingsView().environmentObject(model)
+        }
     }
 }
 
@@ -32,6 +36,18 @@ struct MenuBarContent: View {
         Button(model.allVirtualMuted ? "Unmute Virtual Mics (B1–B3)" : "Mute Virtual Mics (B1–B3)") {
             model.toggleVirtualMute()
         }
+        Divider()
+        switch model.recorderState {
+        case .recording, .paused: Button("Stop Recording") { model.stopRecording() }
+        case .armed: Button("Start Recording") { model.recordOrResume() }
+        default: Button("Start Recording (arm in mixer)") {}.disabled(true)
+        }
+        if !model.settings.scenes.isEmpty {
+            Menu("Load Scene") {
+                ForEach(model.settings.scenes.keys.sorted(), id: \.self) { n in Button(n) { try? model.loadScene(n) } }
+            }
+        }
+        SettingsLink { Text("Settings…") }
         Divider()
         Button("Quit Mixdeck") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }

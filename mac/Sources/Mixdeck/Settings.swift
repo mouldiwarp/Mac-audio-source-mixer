@@ -5,12 +5,14 @@ enum SourceSetting: Codable, Hashable {
     case device(uid: String, name: String, channelA: Int, channelB: Int)
     case systemAudio
     case app(bundleIDs: [String], name: String)
+    case file(path: String, name: String)
 
     var label: String {
         switch self {
         case .device(_, let name, let a, let b): return a == b ? "\(name) ch \(a)" : "\(name) \(a)-\(b)"
         case .systemAudio: return "System audio"
         case .app(_, let name): return name
+        case .file(_, let name): return "▶︎ " + name
         }
     }
 }
@@ -27,6 +29,8 @@ struct StripSetting: Codable, Identifiable, Hashable {
     /// A1 A2 A3 B1 B2 B3
     var assign: [Bool] = [false, false, false, true, false, false]
     var fx = FxSetting()
+    /// File player strips only.
+    var loop = false
 
     init(name: String, source: SourceSetting? = nil) { self.name = name; self.source = source }
 
@@ -37,6 +41,7 @@ struct StripSetting: Codable, Identifiable, Hashable {
         mute = c.get(.mute, false); solo = c.get(.solo, false)
         assign = c.get(.assign, [false, false, false, true, false, false])
         fx = c.get(.fx, FxSetting())
+        loop = c.get(.loop, false)
     }
 }
 
@@ -67,6 +72,11 @@ struct AppSettings: Codable {
     var launchAtLogin = false
     /// User strip presets by name.
     var userPresets: [String: FxSetting] = [:]
+    var recorder = RecorderSettings()
+    var control = ControlSettings()
+    var midiMappings: [MidiMapping] = []
+    var hotkeys: [Hotkey] = []
+    var scenes: [String: MixScene] = [:]
 
     init() {}
 
@@ -78,6 +88,11 @@ struct AppSettings: Codable {
         buses = try c.decodeIfPresent([BusSetting].self, forKey: .buses) ?? d.buses
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         userPresets = c.get(.userPresets, [:])
+        recorder = c.get(.recorder, RecorderSettings())
+        control = c.get(.control, ControlSettings())
+        midiMappings = c.get(.midiMappings, [])
+        hotkeys = c.get(.hotkeys, [])
+        scenes = c.get(.scenes, [:])
     }
 
     static var fileURL: URL {
@@ -212,4 +227,86 @@ enum FxPresets {
 
         return [("Flat", FxSetting()), ("Voice – clean", clean), ("Voice – broadcast", broadcast), ("Webcam mic cleanup", webcam)]
     }
+}
+
+// MARK: Phase 4 (spec/features/control-and-recording.md)
+
+struct RecorderSettings: Codable, Hashable {
+    enum Format: String, Codable, CaseIterable { case wav, caf, m4a }
+    var directory: String = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Mixdeck Recordings").path
+    var prefix = "Record"
+    var format = Format.wav
+    var bits = 24            // wav/caf: 16, 24, 32 (float)
+    var kbps = 192           // m4a
+    var mono = false
+    var preRecordSeconds = 0
+    var timerMinutes = 0     // 0 = off
+    var armStrips: [Bool] = Array(repeating: false, count: 8)
+    var armBuses: [Bool] = [false, false, false, true, false, false]
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = RecorderSettings()
+        directory = c.get(.directory, d.directory); prefix = c.get(.prefix, d.prefix)
+        format = c.get(.format, d.format); bits = c.get(.bits, d.bits); kbps = c.get(.kbps, d.kbps)
+        mono = c.get(.mono, d.mono); preRecordSeconds = c.get(.preRecordSeconds, 0); timerMinutes = c.get(.timerMinutes, 0)
+        armStrips = c.get(.armStrips, d.armStrips); armBuses = c.get(.armBuses, d.armBuses)
+        if armStrips.count != 8 { armStrips = d.armStrips }
+        if armBuses.count != 6 { armBuses = d.armBuses }
+    }
+}
+
+struct ControlSettings: Codable, Hashable {
+    var apiOn = false
+    var apiPort = 9040
+    var oscOn = false
+    var oscPort = 9000
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        apiOn = c.get(.apiOn, false); apiPort = c.get(.apiPort, 9040)
+        oscOn = c.get(.oscOn, false); oscPort = c.get(.oscPort, 9000)
+    }
+}
+
+struct MidiMapping: Codable, Hashable, Identifiable {
+    enum Kind: String, Codable { case cc, note }
+    var id = UUID()
+    var channel: Int        // 0...15
+    var kind: Kind
+    var number: Int         // CC or note number
+    var path: String
+    var momentary = false   // notes on boolean paths
+
+    var label: String { "Ch \(channel + 1) " + (kind == .cc ? "CC \(number)" : "Note \(number)") }
+}
+
+struct Hotkey: Codable, Hashable, Identifiable {
+    enum Action: Codable, Hashable {
+        case toggle(path: String)
+        case set(path: String, value: String)
+        case scene(name: String)
+
+        var label: String {
+            switch self {
+            case .toggle(let p): return "Toggle \(p)"
+            case .set(let p, let v): return "\(p) = \(v)"
+            case .scene(let n): return "Load scene “\(n)”"
+            }
+        }
+    }
+    var id = UUID()
+    var keyCode: UInt32
+    var modifiers: UInt32   // Carbon modifier flags
+    var display: String
+    var action: Action
+}
+
+/// Mixing state without sources or devices (spec §8).
+struct MixScene: Codable, Hashable {
+    var strips: [StripSetting]
+    var buses: [BusSetting]
 }

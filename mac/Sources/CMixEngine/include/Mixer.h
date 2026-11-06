@@ -11,6 +11,7 @@
 
 #include <CoreAudio/CoreAudio.h>
 #include "VoiceFx.h"
+#include "StereoRing.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -51,6 +52,9 @@ void MixerDestroy(Mixer *m);
 OSStatus MixerStripAttachDevice(Mixer *m, int strip, AudioObjectID device, uint32_t chA, uint32_t chB,
                                 char *err, size_t errLen);
 void MixerStripAttachTone(Mixer *m, int strip, double hz);   // test source, -12 dBFS sine
+// File player source: the strip pulls 48 kHz stereo from `ring` (not owned; the
+// caller keeps it alive until it is detached). Pause/flush via StereoRing.
+void MixerStripAttachRing(Mixer *m, int strip, StereoRing *ring);
 void MixerStripDetach(Mixer *m, int strip);
 
 // Strip controls (any time, take effect within one cycle, ramped).
@@ -71,6 +75,12 @@ void MixerBusSetGainDB(Mixer *m, int bus, float dB);
 void MixerBusSetMute(Mixer *m, int bus, bool on);
 // A buses only (bus 0..2). device 0 = none. Uses the device's output channels 1-2.
 OSStatus MixerBusSetDevice(Mixer *m, int bus, AudioObjectID device, char *err, size_t errLen);
+
+// Recording taps (spec/features/control-and-recording.md §1). Every non-NULL ring
+// receives that strip's post-pan signal or that bus's output, all in the same
+// cycles, from the moment the set is installed. Pass NULL arrays to remove.
+// Rings are not owned; the previous set is no longer used when this returns.
+void MixerSetCaptures(Mixer *m, StereoRing *const strips[MIXER_MAX_STRIPS], StereoRing *const buses[MIXER_NUM_BUSES]);
 
 // Peaks reset on each call.
 void MixerGetStats(Mixer *m, MixerStats *out);

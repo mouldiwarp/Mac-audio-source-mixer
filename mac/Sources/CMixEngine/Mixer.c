@@ -90,7 +90,7 @@ static OSStatus locateChannel(AudioObjectID dev, AudioObjectPropertyScope scope,
 
 // ---- Sources (strip inputs) -----------------------------------------------------
 
-typedef enum { SRC_DEVICE, SRC_TONE } SourceKind;
+typedef enum { SRC_DEVICE, SRC_TONE, SRC_RING } SourceKind;
 
 typedef struct Source {
     SourceKind kind;
@@ -100,6 +100,7 @@ typedef struct Source {
     double rate;
     AdaptiveRing *ring;
     double phase, inc;            // tone
+    StereoRing *player;           // SRC_RING (not owned)
     float sl[MAXF], sr[MAXF];     // producer scratch
 } Source;
 
@@ -198,6 +199,11 @@ typedef struct {
     _Atomic uint32_t peakL, peakR;
 } Bus;
 
+typedef struct {
+    StereoRing *strip[MIXER_MAX_STRIPS];
+    StereoRing *bus[MIXER_NUM_BUSES];
+} CaptureSet;
+
 struct Mixer {
     AudioObjectID feed;
     AudioDeviceIOProcID proc;
@@ -207,6 +213,7 @@ struct Mixer {
     Bus bus[MIXER_NUM_BUSES];
     float acc[MIXER_NUM_BUSES][2][MAXF];
     float sl[MAXF], sr[MAXF];
+    _Atomic(CaptureSet *) captures;
     _Atomic uint64_t cycles;
     _Atomic uint32_t lastFrames;
     volatile double load;
@@ -255,6 +262,7 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
         memset(m->acc[b][0], 0, frames * sizeof(float));
         memset(m->acc[b][1], 0, frames * sizeof(float));
     }
+    CaptureSet *cap = atomic_load_explicit(&m->captures, memory_order_acquire);
     bool anySolo = false;
     for (int s = 0; s < MIXER_MAX_STRIPS; s++)
         if (atomic_load_explicit(&m->strip[s].solo, memory_order_relaxed) &&
@@ -263,7 +271,13 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
     for (int s = 0; s < MIXER_MAX_STRIPS; s++) {
         Strip *st = &m->strip[s];
         Source *src = atomic_load_explicit(&st->src, memory_order_acquire);
-        if (!src) continue;
+        if (!src) {
+            if (cap && cap->strip[s]) {   // keep multitrack files aligned
+                memset(m->sl, 0, frames * sizeof(float)); memset(m->sr, 0, frames * sizeof(float));
+                StereoRingWrite(cap->strip[s], m->sl, m->sr, frames);
+            }
+            continue;
+        }
         if (src->kind == SRC_TONE) {
             for (UInt32 i = 0; i < frames; i++) {
                 float v = (float)(0.25 * sin(src->phase));
@@ -271,6 +285,8 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
                 src->phase += src->inc;
                 if (src->phase > 2 * M_PI) src->phase -= 2 * M_PI;
             }
+        } else if (src->kind == SRC_RING) {
+            StereoRingPull(src->player, m->sl, m->sr, frames);
         } else {
             AdaptiveRingPull(src->ring, m->sl, m->sr, frames, now);
         }
@@ -300,6 +316,7 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
         st->curPL = tl; st->curPR = tr;
         peakStore(&st->peakL, mxl);
         peakStore(&st->peakR, mxr);
+        if (cap && cap->strip[s]) StereoRingWrite(cap->strip[s], m->sl, m->sr, frames);
 
         uint32_t assign = atomic_load_explicit(&st->assign, memory_order_relaxed);
         for (int b = 0; b < MIXER_NUM_BUSES; b++) {
@@ -329,6 +346,7 @@ static OSStatus masterIOProc(AudioObjectID dev, const AudioTimeStamp *inNow, con
         bs->curGain = target;
         peakStore(&bs->peakL, mxl);
         peakStore(&bs->peakR, mxr);
+        if (cap && cap->bus[b]) StereoRingWrite(cap->bus[b], al, ar, frames);
 
         if (b >= MIXER_BUS_B1) {
             int c = (b - MIXER_BUS_B1) * 2;
@@ -411,6 +429,7 @@ void MixerDestroy(Mixer *m) {
     AudioDeviceDestroyIOProcID(m->feed, m->proc);
     for (int s = 0; s < MIXER_MAX_STRIPS; s++) sourceDestroy(atomic_exchange(&m->strip[s].src, NULL));
     for (int b = 0; b < MIXER_NUM_HW_BUSES; b++) sinkDestroy(atomic_exchange(&m->bus[b].sink, NULL));
+    free(atomic_exchange(&m->captures, NULL));
     MixerFreeChains(m);
     free(m);
 }
@@ -458,6 +477,29 @@ void MixerStripAttachTone(Mixer *m, int s, double hz) {
     src->inc = 2 * M_PI * hz / MIX_RATE;
     MixerStripDetach(m, s);
     atomic_store_explicit(&m->strip[s].src, src, memory_order_release);
+}
+
+void MixerStripAttachRing(Mixer *m, int s, StereoRing *ring) {
+    if (!validStrip(s) || !ring) return;
+    Source *src = calloc(1, sizeof *src);
+    if (!src) return;
+    src->kind = SRC_RING;
+    src->player = ring;
+    MixerStripDetach(m, s);
+    atomic_store_explicit(&m->strip[s].src, src, memory_order_release);
+}
+
+void MixerSetCaptures(Mixer *m, StereoRing *const strips[MIXER_MAX_STRIPS], StereoRing *const buses[MIXER_NUM_BUSES]) {
+    CaptureSet *set = NULL;
+    bool any = false;
+    for (int i = 0; strips && i < MIXER_MAX_STRIPS; i++) any |= strips[i] != NULL;
+    for (int i = 0; buses && i < MIXER_NUM_BUSES; i++) any |= buses[i] != NULL;
+    if (any && (set = calloc(1, sizeof *set))) {
+        if (strips) memcpy(set->strip, strips, sizeof set->strip);
+        if (buses) memcpy(set->bus, buses, sizeof set->bus);
+    }
+    CaptureSet *old = atomic_exchange(&m->captures, set);
+    if (old) { waitForCycle(m); free(old); }
 }
 
 void MixerStripSetGainDB(Mixer *m, int s, float dB) { if (validStrip(s)) atomic_store(&m->strip[s].gainDB, fmaxf(-60.0f, fminf(12.0f, dB))); }

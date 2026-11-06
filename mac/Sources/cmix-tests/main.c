@@ -97,6 +97,7 @@ static void drift_case(const char *name, double inRate, double outRate, double p
 int main(int argc, char **argv) {
     srand(1);
     runFxTests();
+    void runRingTests(void); runRingTests();
     if (argc > 1 && strcmp(argv[1], "fx") == 0) {   // voice chain only (fast)
         printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
         return failures ? 1 : 0;

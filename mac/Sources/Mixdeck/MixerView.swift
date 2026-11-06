@@ -47,9 +47,16 @@ struct MixerView: View {
     }
 
     private var footer: some View {
-        HStack {
-            Text(String(format: "Engine load %.1f%%", model.load * 100)).foregroundStyle(Theme.dim)
+        HStack(spacing: 14) {
+            RecorderBar()
+            Divider().frame(height: 18)
+            ScenesMenu()
             Spacer()
+            Text(String(format: "Engine load %.1f%%", model.load * 100)).foregroundStyle(Theme.dim)
+            SettingsLink { Image(systemName: "gearshape") }
+                .buttonStyle(.plain)
+                .help("Recording, remote control, MIDI and shortcuts")
+                .accessibilityLabel("Settings")
             Toggle("Launch at login", isOn: Binding(get: { model.settings.launchAtLogin },
                                                     set: { model.setLaunchAtLogin($0) }))
                 .toggleStyle(.checkbox)
@@ -127,6 +134,7 @@ struct StripView: View {
             }
             SourcePicker(strip: strip)
             statusLine
+            if case .file = strip.source { PlayerRow(strip: strip) }
             fxRow
             HStack(alignment: .bottom, spacing: 6) {
                 MeterView(l: meter.l, r: meter.r)
@@ -231,6 +239,9 @@ struct SourcePicker: View {
                     Divider()
                     Button("Refresh list") { model.refreshDevices() }
                 }
+            }
+            Section("File") {
+                Button("Audio file…") { model.chooseFile(for: strip.id) }
             }
             Divider()
             Button("None") { model.setSource(strip.id, nil) }

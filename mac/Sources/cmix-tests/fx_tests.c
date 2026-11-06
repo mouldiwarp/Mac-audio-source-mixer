@@ -314,3 +314,38 @@ void runFxTests(void) {
     testCpu();
     testLiveChange();
 }
+
+#include "StereoRing.h"
+
+// Recorder / player ring (spec/features/control-and-recording.md §1-2).
+void runRingTests(void) {
+    printf("-- stereo ring\n");
+    StereoRing *a = StereoRingCreate(4096), *b = StereoRingCreate(4096);
+    float l[1000], r[1000], ol[1000], orr[1000];
+    for (int i = 0; i < 1000; i++) { l[i] = (float)i; r[i] = -(float)i; }
+    bool ok = true;
+    uint64_t n = 0;
+    for (int k = 0; k < 50; k++) {   // 50 cycles written to both rings, trimmed like the writer does
+        StereoRingWrite(a, l, r, 256); StereoRingWrite(b, l, r, 256);
+        n += 256;
+        uint64_t end = StereoRingWriteCount(a) < StereoRingWriteCount(b) ? StereoRingWriteCount(a) : StereoRingWriteCount(b);
+        StereoRingTrimTo(a, end > 1000 ? end - 1000 : 0); StereoRingTrimTo(b, end > 1000 ? end - 1000 : 0);
+    }
+    ok &= StereoRingAvailable(a) == 1000 && StereoRingAvailable(b) == 1000;
+    uint32_t ga = StereoRingRead(a, ol, orr, 1000);
+    float bl[1000], br[1000];
+    uint32_t gb = StereoRingRead(b, bl, br, 1000);
+    ok &= ga == 1000 && gb == 1000 && memcmp(ol, bl, sizeof ol) == 0 && orr[0] == -ol[0];
+    CHECK(ok, "pre-record window: both tracks keep the same 1000 frames");
+    StereoRingWrite(a, l, r, 1000); StereoRingWrite(a, l, r, 1000); StereoRingWrite(a, l, r, 1000);
+    StereoRingWrite(a, l, r, 1000); StereoRingWrite(a, l, r, 1000);
+    CHECK(StereoRingDropped(a) == 904 && StereoRingAvailable(a) == 4096, "overflow is counted, not wrapped (dropped %llu)", StereoRingDropped(a));
+    StereoRingSetPaused(a, true);
+    uint32_t got = StereoRingPull(a, ol, orr, 256);
+    CHECK(got == 0 && ol[0] == 0 && StereoRingAvailable(a) == 4096, "paused: silence, nothing consumed");
+    StereoRingSetPaused(a, false);
+    StereoRingRequestFlush(a);
+    got = StereoRingPull(a, ol, orr, 256);
+    CHECK(got == 0 && StereoRingAvailable(a) == 0 && !StereoRingFlushPending(a), "flush honoured by the consumer");
+    StereoRingDestroy(a); StereoRingDestroy(b);
+}

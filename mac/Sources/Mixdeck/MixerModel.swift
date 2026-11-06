@@ -21,13 +21,34 @@ final class MixerModel: ObservableObject {
     @Published private(set) var busFx: [FxMeters] = Array(repeating: FxMeters(), count: 6)
     @Published private(set) var stripUnderruns: [UInt64] = Array(repeating: 0, count: Int(MIXER_MAX_STRIPS))
     @Published private(set) var busStatus: [String?] = [nil, nil, nil]
-    @Published private(set) var engineError: String?
+    @Published var engineError: String?
     @Published private(set) var load: Double = 0
     @Published private(set) var inputs: [AudioDevice] = []
     @Published private(set) var outputs: [AudioDevice] = []
     @Published private(set) var apps: [(bundleID: String, name: String)] = []
 
-    private var mixer: OpaquePointer?
+    struct PlayerInfo: Equatable { var playing = false; var position: Double = 0; var duration: Double = 0 }
+    enum RecorderState: Equatable { case idle, armed, recording, paused, saving }
+
+    // Phase 4 state (spec/features/control-and-recording.md); logic in MixerModel+Control.swift.
+    @Published var playerInfo: [UUID: PlayerInfo] = [:]
+    @Published var recorderState = RecorderState.idle
+    @Published var recElapsed: Double = 0
+    @Published var recDropped: UInt64 = 0
+    @Published var recError: String?
+    @Published var lastRecording: URL?
+    @Published var midiLearnPath: String?
+    @Published var lastMidi: String = "—"
+    @Published var controlStatus: [String: String] = [:]
+    @Published var hotkeyFailures: Set<UUID> = []
+    var players: [Int: FilePlayer] = [:]
+    var writer: RecordWriter?
+    var api: ApiServer?
+    var osc: OscServer?
+    var midi: MidiInput?
+    var hotkeyCenter: HotkeyCenter?
+
+    private(set) var mixer: OpaquePointer?
     private var taps: [Int: ProcessTap] = [:]
     private var saveWork: DispatchWorkItem?
     private var meterTimer: Timer?
@@ -39,6 +60,7 @@ final class MixerModel: ObservableObject {
         startEngine()
         listenForDeviceChanges()
         syncLoginItem()
+        startControl()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.pollMeters() }
         }
@@ -61,19 +83,23 @@ final class MixerModel: ObservableObject {
         for i in settings.strips.indices { applyStrip(i) }
         for b in 0..<6 { applyBus(b) }
         if MixerStart(m) != noErr { engineError = "Engine failed to start (feed device)" }
+        rearmRecorder()
     }
 
     func shutdown() {
         meterTimer?.invalidate()
+        if recorderState == .recording || recorderState == .paused { stopRecording(); writerDrainForQuit() }
         saveNow()
         if let m = mixer { MixerDestroy(m) }
         mixer = nil
+        writer?.shutdown(); writer = nil
         taps.removeAll()
+        players.removeAll()
     }
 
     // MARK: Strips
 
-    private func applyStrip(_ i: Int) {
+    func applyStrip(_ i: Int) {
         guard let m = mixer, i < Int(MIXER_MAX_STRIPS) else { return }
         let s = settings.strips[i]
         MixerStripSetGainDB(m, Int32(i), s.gainDB)
@@ -92,6 +118,8 @@ final class MixerModel: ObservableObject {
         let s = settings.strips[i]
         MixerStripDetach(m, Int32(i))
         taps[i] = nil
+        players[i] = nil
+        playerInfo[s.id] = nil
         guard let source = s.source else { status[s.id] = .empty; return }
         var err = [CChar](repeating: 0, count: 256)
         switch source {
@@ -99,6 +127,19 @@ final class MixerModel: ObservableObject {
             guard let dev = AudioDevices.device(uid: uid) else { status[s.id] = .missing; return }
             let st = MixerStripAttachDevice(m, Int32(i), dev.id, UInt32(a), UInt32(b), &err, err.count)
             status[s.id] = st == noErr ? .ok : .error(String(cString: err))
+        case .file(let path, _):
+            do {
+                let p = try FilePlayer(url: URL(fileURLWithPath: path))
+                p.setLoop(s.loop)
+                let id = s.id
+                p.onFinished = { [weak self] in self?.playerInfo[id]?.playing = false }
+                MixerStripAttachRing(m, Int32(i), p.ring)
+                players[i] = p
+                playerInfo[s.id] = PlayerInfo(playing: false, position: 0, duration: p.duration)
+                status[s.id] = .ok
+            } catch {
+                status[s.id] = FileManager.default.fileExists(atPath: path) ? .error("\(error)") : .missing
+            }
         case .systemAudio, .app:
             do {
                 let target: ProcessTap.Target
@@ -123,9 +164,18 @@ final class MixerModel: ObservableObject {
 
     func removeStrip(_ id: UUID) {
         guard let m = mixer, let idx = settings.strips.firstIndex(where: { $0.id == id }) else { return }
+        if recorderState == .recording || recorderState == .paused || recorderState == .saving {
+            recError = "Stop recording before removing a strip"
+            return
+        }
         // Engine slots follow array order: detach everything from idx on, then re-apply.
-        for i in idx..<settings.strips.count { MixerStripDetach(m, Int32(i)); taps[i] = nil }
+        for i in idx..<settings.strips.count { MixerStripDetach(m, Int32(i)); taps[i] = nil; players[i] = nil }
         settings.strips.remove(at: idx)
+        playerInfo[id] = nil
+        // Arms follow strip positions.
+        settings.recorder.armStrips.remove(at: idx)
+        settings.recorder.armStrips.append(false)
+        rearmRecorder()
         status[id] = nil
         for i in idx..<settings.strips.count { applyStrip(i) }
         scheduleSave()
@@ -174,13 +224,14 @@ final class MixerModel: ObservableObject {
         scheduleSave()
     }
 
-    private func index(_ id: UUID) -> Int? { settings.strips.firstIndex { $0.id == id } }
+    func index(_ id: UUID) -> Int? { settings.strips.firstIndex { $0.id == id } }
 
     private func shortName(_ s: SourceSetting) -> String {
         switch s {
         case .device(_, let name, _, _): return String(name.prefix(14))
         case .systemAudio: return "System"
         case .app(_, let name): return String(name.prefix(14))
+        case .file(_, let name): return String((name as NSString).deletingPathExtension.prefix(14))
         }
     }
 
@@ -287,6 +338,7 @@ final class MixerModel: ObservableObject {
         stripFx = zip(stripFx, strips).map { old, new in smoothFx(old, new.fx) }
         busFx = zip(busFx, buses).map { old, new in smoothFx(old, new.fx) }
         load = s.load
+        pollPhase4()
     }
 
     private func smoothFx(_ old: FxMeters, _ new: FxMeters) -> FxMeters {
@@ -299,7 +351,7 @@ final class MixerModel: ObservableObject {
 
     // MARK: Persistence and login item
 
-    private func scheduleSave() {
+    func scheduleSave() {
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.saveNow() } }
         saveWork = work

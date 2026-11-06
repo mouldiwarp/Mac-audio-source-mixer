@@ -4,6 +4,14 @@ A multi-source mixer with three virtual microphones ("Mixer B1", "Mixer B2" and 
 
 Each strip has an **FX** button that opens its voice chain: denoiser, gate, 3-band EQ, 6-band parametric EQ, compressor with transfer curve, and limiter, plus presets. Each bus has an **FX** button for its parametric EQ, limiter and Stereo/Mono mode.
 
+Phase 4 (`../spec/features/control-and-recording.md`):
+- **Recorder:** in the window footer. Arm buses and/or strips, then record; each armed item gets its own file.
+- **File player:** a strip source.
+- **Scenes:** in the footer and the menu bar.
+- **Settings (⌘,):** recording format, a text API on 127.0.0.1:9040, OSC on 127.0.0.1:9000, MIDI learn, and global shortcuts. The API and OSC are off by default.
+
+      printf 'Strip[0].Gain = -10;\nStrip[0].Gain;\n' | nc 127.0.0.1 9040
+
 ## Layout
 - `Driver/`: the AudioServerPlugIn (C). `make` builds it, and `make test` runs the in-process driver tests.
 - `Sources/CMixEngine`: the real-time engine (C).
@@ -34,3 +42,4 @@ Settings: `~/Library/Application Support/Mixdeck/settings.json`.
 - App sources are matched by bundle ID when the strip is set. An app started later needs the strip re-selected.
 - Safari plays audio through a shared WebKit process (`com.apple.WebKit.GPU`), so capture Safari through that entry or use System audio.
 - 48 kHz master rate. A buses use output channels 1-2.
+- Device connections happen on the main thread. If an output device's driver stops responding, the app can hang at launch. Restarting the audio service (`sudo killall coreaudiod`) clears it.
