@@ -24,6 +24,8 @@ Status: Phase 2. Written 2026-11-06. Our own design. It takes only the strip →
 
 Signal order: source → mono → gain → pan → mute/solo → meter → assigned buses.
 
+Double-clicking a fader (strip or bus) sets it to 0 dB. Double-clicking the pan control centres it. A double-click is two clicks without movement, within the system double-click interval.
+
 ## Bus controls
 | Control | Range | Default |
 |---|---|---|
