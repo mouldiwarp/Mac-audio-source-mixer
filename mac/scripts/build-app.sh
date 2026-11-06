@@ -9,5 +9,6 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Mixdeck "$APP/Contents/MacOS/Mixdeck"
 cp App/Info.plist "$APP/Contents/Info.plist"
+cp Assets/atmosphere-bar.jpg "$APP/Contents/Resources/"   # backdrop (gm-guitars.net)
 codesign --force --sign - "$APP"
 echo "built $APP"

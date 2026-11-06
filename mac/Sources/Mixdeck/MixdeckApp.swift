@@ -56,6 +56,21 @@ struct MenuBarContent: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: MixerModel?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Development aid: write the mixer window to <dir>/mixer.png and quit.
+        guard MixerModel.isPreview, let i = CommandLine.arguments.firstIndex(of: "--snapshot"),
+              i + 1 < CommandLine.arguments.count else { return }
+        let dir = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if let view = NSApp.windows.first(where: { $0.title == "Mixdeck" })?.contentView,
+               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("mixer.png"))
+            }
+            exit(0)
+        }
+    }
+
     // Keep mixing when the window is closed; quit from the menu bar.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

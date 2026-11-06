@@ -10,7 +10,7 @@ struct InsertsSection: View {
         let list = model.insertSettings(target)
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Plug-ins").font(.callout.weight(.semibold))
+                Text("PLUG-INS").font(Theme.heading(12)).tracking(1.4).foregroundStyle(Theme.gold)
                 Spacer()
                 Menu("Add plug-in") {
                     if catalog.isEmpty { Text("No Audio Unit effects found") }
@@ -30,7 +30,7 @@ struct InsertsSection: View {
             ForEach(Array(list.enumerated()), id: \.element.id) { k, s in row(k, s, count: list.count) }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.strip))
+        .gmCard()
         .onAppear { if catalog.isEmpty { catalog = PluginCatalog.byVendor() } }
     }
 
@@ -101,15 +101,15 @@ struct BalancePanel: View {
             case .measuring(let p):
                 ProgressView(value: p) { Text("Measuring…") }
             case .done(let results):
-                if results.isEmpty { Text("Select at least two strips with a source.").foregroundStyle(.orange) }
+                if results.isEmpty { Text("Select at least two strips with a source.").foregroundStyle(Theme.warn) }
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                     ForEach(results, id: \.name) { r in
                         GridRow {
                             Text(r.name)
                             Text(r.measured.map { String(format: "%.1f LUFS", $0) } ?? "no signal")
-                                .foregroundStyle(r.measured == nil ? .orange : .secondary)
+                                .foregroundStyle(r.measured == nil ? Theme.warn : .secondary)
                             Text(r.newGain.map { String(format: "fader %+.1f dB", $0) } ?? "unchanged")
-                            if r.clamped { Text("at limit").foregroundStyle(.orange) }
+                            if r.clamped { Text("at limit").foregroundStyle(Theme.warn) }
                         }
                         .font(.caption.monospacedDigit())
                     }
@@ -152,7 +152,7 @@ struct TrimRow: View {
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: .bold))
             .frame(width: 22, height: 18)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color(white: 0.25)))
+            .background(LampFace(on: false))
             .accessibilityLabel(d > 0 ? "Trim up 1 dB" : "Trim down 1 dB")
     }
 }

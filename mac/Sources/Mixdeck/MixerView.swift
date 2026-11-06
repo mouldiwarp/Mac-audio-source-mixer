@@ -24,7 +24,8 @@ struct MixerView: View {
                                 Image(systemName: "plus").font(.title2).frame(width: 44, height: 44)
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(Theme.dim)
+                            .foregroundStyle(Theme.gold)
+                            .gmCard(radius: 22)
                             .help("Add strip")
                             .accessibilityLabel("Add strip")
                         }
@@ -35,13 +36,16 @@ struct MixerView: View {
                 // The window sizes itself to the strips (see StripLayout); it only
                 // scrolls if even the narrowest strips do not fit on the screen.
                 .frame(width: layout.areaWidth)
-                Divider().background(Color.black)
+                Rectangle().fill(Theme.gold.opacity(0.22)).frame(width: 1).padding(.vertical, 14)
                 BusSection().padding(10)
             }
             footer
         }
-        .background(Theme.panel)
+        .background(Backdrop())
+        .background(WindowTint())
         .foregroundStyle(Theme.text)
+        .tint(Theme.accent)
+        .preferredColorScheme(.dark)
         .fixedSize(horizontal: false, vertical: true)
         .animation(.easeInOut(duration: 0.2), value: model.settings.strips.count)
     }
@@ -65,7 +69,8 @@ struct MixerView: View {
         .font(.caption)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.black.opacity(0.25))
+        .background(Theme.obsidian.opacity(0.88))
+        .overlay(alignment: .top) { Rectangle().fill(Theme.gold.opacity(0.4)).frame(height: 1) }
     }
 
     private func banner(_ text: String, color: Color, action: (String, () -> Void)? = nil) -> some View {
@@ -123,7 +128,7 @@ struct StripView: View {
             HStack(spacing: 2) {
                 TextField("Name", text: Binding(get: { strip.name }, set: { v in model.update(strip.id) { $0.name = v } }))
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Theme.heading(12.5))
                     .multilineTextAlignment(.center)
                 Button { model.setBalanceSelected(strip.id, !strip.balanceSelected) } label: {
                     Text("⚖").font(.system(size: 11)).foregroundStyle(strip.balanceSelected ? Theme.warn : Theme.dim)
@@ -148,12 +153,9 @@ struct StripView: View {
                 Fader(dB: Binding(get: { strip.gainDB }, set: { v in model.update(strip.id) { $0.gainDB = v } }))
             }
             .frame(height: 210)
-            Text(FaderLaw.label(strip.gainDB) + " dB").font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
+            LedReadout(text: FaderLaw.label(strip.gainDB) + " dB")
             if strip.balanceSelected { TrimRow(strip: strip) }
-            Slider(value: Binding(get: { Double(strip.pan) }, set: { v in model.update(strip.id) { $0.pan = Float(v) } }), in: -1...1)
-                .controlSize(.mini)
-                .accessibilityLabel("Pan")
-                .onTapGesture(count: 2) { model.update(strip.id) { $0.pan = 0 } }
+            PanControl(pan: Binding(get: { strip.pan }, set: { v in model.update(strip.id) { $0.pan = v } }))
             HStack(spacing: 3) {
                 LatchButton(title: "MONO", on: strip.mono) { model.update(strip.id) { $0.mono.toggle() } }
                 LatchButton(title: "S", on: strip.solo, tint: Theme.warn) { model.update(strip.id) { $0.solo.toggle() } }
@@ -170,7 +172,7 @@ struct StripView: View {
         }
         .padding(8)
         .frame(width: width)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.strip))
+        .gmCard()
         .contextMenu {
             Button("Remove strip", role: .destructive) { model.removeStrip(strip.id) }
         }
@@ -186,9 +188,7 @@ struct StripView: View {
                 .popover(isPresented: $showFx, arrowEdge: .trailing) {
                     StripFxEditor(stripID: strip.id, index: index).environmentObject(model)
                 }
-            Circle()
-                .fill(!fx.gateOn ? Color(white: 0.3) : m.gateOpen ? Theme.accent : Theme.danger)
-                .frame(width: 7, height: 7)
+            LedDot(on: fx.gateOn, color: m.gateOpen ? Theme.ok : Theme.danger)
                 .help(fx.gateOn ? (m.gateOpen ? "Gate open" : "Gate closed") : "Gate off")
                 .accessibilityLabel(fx.gateOn ? (m.gateOpen ? "Gate open" : "Gate closed") : "Gate off")
             ReductionBar(dB: fx.compOn ? m.compGainReductionDB : 0)
@@ -207,7 +207,7 @@ struct StripView: View {
         switch model.status[strip.id] ?? .empty {
         case .ok:
             let u = model.stripUnderruns[index]
-            Text(u == 0 ? "live" : "live · \(u) dropouts").font(.caption2).foregroundStyle(u == 0 ? Theme.accent : Theme.warn)
+            Text(u == 0 ? "live" : "live · \(u) dropouts").font(.caption2).foregroundStyle(u == 0 ? Theme.ok : Theme.warn)
         case .empty: Text("no source").font(.caption2).foregroundStyle(Theme.dim)
         case .missing: Text("missing; waiting").font(.caption2).foregroundStyle(Theme.warn)
         case .error(let e): Text(e).font(.caption2).foregroundStyle(Theme.danger).lineLimit(2).help(e)
@@ -270,7 +270,7 @@ struct BusSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("BUSES").font(.caption.weight(.bold)).foregroundStyle(Theme.dim)
+            Text("BUSES").font(Theme.caption(11)).tracking(2.4).foregroundStyle(Theme.gold)
             HStack(alignment: .top, spacing: 6) {
                 ForEach(0..<6, id: \.self) { b in BusView(bus: b) }
             }
@@ -288,7 +288,8 @@ struct BusView: View {
         let meter = model.busMeters[bus]
         let tint = bus < 3 ? Theme.hardwareBus : Theme.virtualBus
         VStack(spacing: 6) {
-            Text(AppSettings.busNames[bus]).font(.system(size: 13, weight: .bold)).foregroundStyle(tint)
+            Text(AppSettings.busNames[bus]).font(Theme.headingBold(13)).tracking(1.2).foregroundStyle(tint)
+                .shadow(color: tint.opacity(0.5), radius: 4)
             if bus < 3 {
                 Menu {
                     Button("None") { model.setBusDevice(bus, nil) }
@@ -308,7 +309,7 @@ struct BusView: View {
                 Fader(dB: Binding(get: { s.gainDB }, set: { v in model.updateBus(bus) { $0.gainDB = v } }), tint: tint)
             }
             .frame(height: 210)
-            Text(FaderLaw.label(s.gainDB)).font(.caption.monospacedDigit()).foregroundStyle(Theme.dim)
+            LedReadout(text: FaderLaw.label(s.gainDB))
             LatchButton(title: "M", on: s.mute, tint: Theme.danger) { model.updateBus(bus) { $0.mute.toggle() } }
                 .accessibilityLabel("Mute \(AppSettings.busNames[bus])")
             LatchButton(title: s.fx.monoOut ? "FX·MONO" : "FX", on: s.fx.anyBusBlockOn || s.inserts.contains { !$0.bypass }) { showFx.toggle() }
@@ -317,6 +318,6 @@ struct BusView: View {
         }
         .padding(6)
         .frame(width: 78)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.strip))
+        .gmCard()
     }
 }

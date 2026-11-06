@@ -16,6 +16,17 @@ Phase 4 (`../spec/features/control-and-recording.md`):
 
       printf 'Strip[0].Gain = -10;\nStrip[0].Gain;\n' | nc 127.0.0.1 9040
 
+## Look
+The visual style is shared with Axeio Silicon and follows gm-guitars.net:
+- **Backdrop:** the site's stage-and-bar photo (`Assets/atmosphere-bar.jpg`), dimmed with a vignette.
+- **Surfaces:** obsidian and slate cards with gold hairlines, and Helvetica headings.
+- **Controls:** brushed-metal fader caps with a glowing index line, LED-segment meters, buttons that light up when on,
+  and amber level readouts.
+- **Buses:** A buses are gold, B buses are a smoky blue.
+
+Colours, fonts and surfaces are in `Sources/Mixdeck/Style.swift`; the controls are in `Controls.swift`.
+`Mixdeck --snapshot <dir>` renders the mixer to `<dir>/mixer.png` without starting the engine.
+
 ## Layout
 - `Driver/`: the AudioServerPlugIn (C). `make` builds it, and `make test` runs the in-process driver tests.
 - `Sources/CMixEngine`: the real-time engine (C).

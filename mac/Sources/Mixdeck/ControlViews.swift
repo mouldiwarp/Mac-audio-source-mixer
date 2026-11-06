@@ -30,8 +30,8 @@ struct PlayerRow: View {
         Button(action: action) {
             Image(systemName: name).font(.system(size: 10, weight: .bold))
                 .frame(maxWidth: .infinity, minHeight: 20)
-                .foregroundStyle(on ? Color.black : Theme.text)
-                .background(RoundedRectangle(cornerRadius: 4).fill(on ? Theme.accent : Color(white: 0.25)))
+                .foregroundStyle(on ? Theme.obsidian : Theme.text)
+                .background(LampFace(on: on))
         }
         .buttonStyle(.plain)
         .help(label)
@@ -160,6 +160,8 @@ struct ControlSettingsView: View {
             ShortcutsTab().tabItem { Label("Shortcuts", systemImage: "keyboard") }
         }
         .frame(width: 560, height: 460)
+        .tint(Theme.accent)
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -260,7 +262,7 @@ struct MidiSettingsTab: View {
                 Picker("Control", selection: $target) { ForEach(paths, id: \.self) { Text($0).tag($0) } }
                     .frame(width: 300)
                 if model.midiLearnPath != nil {
-                    Text("Move a control…").foregroundStyle(.orange)
+                    Text("Move a control…").foregroundStyle(Theme.warn)
                     Button("Cancel") { model.midiLearnPath = nil }.keyboardShortcut(.cancelAction)
                 } else {
                     Button("Learn") { model.midiLearnPath = target }
@@ -312,7 +314,7 @@ struct ShortcutsTab: View {
                         Text(k.display).font(.body.monospaced()).frame(width: 90, alignment: .leading)
                         Text(k.action.label)
                         Spacer()
-                        if model.hotkeyFailures.contains(k.id) { Text("taken by another app").font(.caption).foregroundStyle(.orange) }
+                        if model.hotkeyFailures.contains(k.id) { Text("taken by another app").font(.caption).foregroundStyle(Theme.warn) }
                         Button { model.removeHotkey(k.id) } label: { Image(systemName: "minus.circle") }
                             .buttonStyle(.plain).accessibilityLabel("Remove shortcut")
                     }

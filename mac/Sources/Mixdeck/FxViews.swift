@@ -53,7 +53,7 @@ struct FxSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Toggle(isOn: $isOn) { Text(title).font(.callout.weight(.semibold)) }
+                Toggle(isOn: $isOn) { Text(title.uppercased()).font(Theme.heading(12)).tracking(1.4).foregroundStyle(isOn ? Theme.gold : Theme.text) }
                     .toggleStyle(.switch).controlSize(.mini)
                 Spacer()
                 if let trailing { trailing }
@@ -61,7 +61,7 @@ struct FxSection<Content: View>: View {
             content.opacity(isOn ? 1 : 0.45)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.strip))
+        .gmCard()
     }
 }
 
@@ -215,12 +215,13 @@ struct StripFxEditor: View {
         .frame(width: 470, height: 640)
         .background(Theme.panel)
         .foregroundStyle(Theme.text)
+        .tint(Theme.accent)
     }
 
     private func gateLED(_ m: FxMeters) -> some View {
         let open = !fx.gateOn || m.gateOpen
         return HStack(spacing: 4) {
-            Circle().fill(open ? Theme.accent : Theme.danger).frame(width: 8, height: 8)
+            LedDot(on: true, color: open ? Theme.ok : Theme.danger, size: 8)
             Text(open ? "open" : "closed").font(.caption2).foregroundStyle(Theme.dim)
         }
         .accessibilityElement(children: .combine)
@@ -267,7 +268,7 @@ struct BusFxEditor: View {
         let meters = model.busFx[bus]
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Bus \(AppSettings.busNames[bus])").font(.headline)
+                Text("BUS \(AppSettings.busNames[bus])").font(Theme.headingBold(15)).tracking(1.6).foregroundStyle(Theme.gold)
                 Spacer()
                 Picker("Mode", selection: bind(\.monoOut)) {
                     Text("Stereo").tag(false)
@@ -288,5 +289,6 @@ struct BusFxEditor: View {
         .frame(width: 470)
         .background(Theme.panel)
         .foregroundStyle(Theme.text)
+        .tint(Theme.accent)
     }
 }

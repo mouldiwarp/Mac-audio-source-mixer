@@ -63,8 +63,13 @@ final class MixerModel: ObservableObject {
     private var meterTimer: Timer?
     private var deviceListener: AudioObjectPropertyListenerBlock?
 
+    /// `--snapshot <dir>`: render the UI with the saved settings and sample meter levels,
+    /// without starting the engine, opening devices or saving anything.
+    static let isPreview = CommandLine.arguments.contains("--snapshot")
+
     init() {
         settings = AppSettings.load()
+        if Self.isPreview { fillPreviewState(); return }
         refreshDevices()
         startEngine()
         listenForDeviceChanges()
@@ -96,7 +101,16 @@ final class MixerModel: ObservableObject {
         rearmRecorder()
     }
 
+    private func fillPreviewState() {
+        let levels: [Float] = [0.42, 0.18, 0.6, 0.08, 0.3, 0.5, 0.25, 0.12]
+        stripMeters = levels.map { Meter(l: $0, r: $0 * 0.85) }
+        busMeters = [0.55, 0.3, 0.0, 0.45, 0.2, 0.0].map { Meter(l: $0, r: $0 * 0.9) }
+        for s in settings.strips where s.source != nil { status[s.id] = .ok }
+        load = 0.031
+    }
+
     func shutdown() {
+        if Self.isPreview { return }
         meterTimer?.invalidate()
         if recorderState == .recording || recorderState == .paused { stopRecording(); writerDrainForQuit() }
         saveNow()
