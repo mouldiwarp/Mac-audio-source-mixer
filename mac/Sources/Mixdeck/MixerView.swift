@@ -112,10 +112,19 @@ struct StripView: View {
     var body: some View {
         let meter = model.stripMeters[index]
         VStack(spacing: 6) {
-            TextField("Name", text: Binding(get: { strip.name }, set: { v in model.update(strip.id) { $0.name = v } }))
-                .textFieldStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
-                .multilineTextAlignment(.center)
+            HStack(spacing: 2) {
+                TextField("Name", text: Binding(get: { strip.name }, set: { v in model.update(strip.id) { $0.name = v } }))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                Button { model.removeStrip(strip.id) } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.dim)
+                .help("Remove strip")
+                .accessibilityLabel("Remove strip \(strip.name)")
+            }
             SourcePicker(strip: strip)
             statusLine
             fxRow

@@ -133,10 +133,12 @@ final class MixerModel: ObservableObject {
 
     func setSource(_ id: UUID, _ source: SourceSetting?) {
         guard let i = index(id) else { return }
+        // The name follows the source unless the user typed their own.
+        let current = settings.strips[i].name
+        let auto = current.isEmpty || current.hasPrefix("Strip ") || current == "Mic"
+            || settings.strips[i].source.map { shortName($0) == current } == true
         settings.strips[i].source = source
-        if let source, settings.strips[i].name.hasPrefix("Strip ") || settings.strips[i].name == "Mic" {
-            settings.strips[i].name = shortName(source)
-        }
+        if auto { settings.strips[i].name = source.map(shortName) ?? "Strip \(i + 1)" }
         attachSource(i)
         scheduleSave()
     }
