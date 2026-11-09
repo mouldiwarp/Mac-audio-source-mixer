@@ -1,0 +1,102 @@
+# Mixdeck
+
+A native macOS audio mixer with three virtual microphones. Mix audio interfaces, webcam mics and system or app audio, and send the result to Zoom, Google Meet, QuickTime and more.
+
+![Mixdeck](assets/mixdeck.png)
+
+## Install
+
+Mixdeck needs **macOS 14.4 or later** and Apple's command line developer tools. There is no prebuilt download: the virtual audio driver is built and signed on your own Mac (ad-hoc signed, not notarised), so you build and install from source. If the tools are missing, the script offers to install them. From a clone of this repo, run:
+
+    ./install.sh
+
+This builds everything from source and installs two things:
+- **Driver:** the virtual audio driver. This step asks for your admin password and briefly restarts macOS audio.
+- **App:** `/Applications/Mixdeck.app`.
+
+Options:
+- `--launch-at-login`: start Mixdeck when you log in.
+- `--check`: build only, installing nothing.
+- `--app-only`: reinstall just the app.
+- `--test`: run the tests first.
+- `--uninstall`: remove the app and the driver.
+
+On first run, allow Microphone and System Audio Recording access when macOS asks.
+
+## License
+Released under the [MIT License](LICENSE). It installs an audio driver and is provided as-is, with no warranty.
+
+---
+
+# Details (`mac/`)
+
+A multi-source mixer with three virtual microphones ("Mixer B1", "Mixer B2" and "Mixer B3") and three hardware output buses. Specs: `../spec/features/mixer.md`, `../spec/features/virtual-devices.md` and `../spec/features/voice-dsp.md`.
+
+Each strip has an **FX** button that opens its voice chain: denoiser, gate, 3-band EQ, 6-band parametric EQ, compressor with transfer curve, and limiter, plus presets. Each bus has an **FX** button for its parametric EQ, limiter and Stereo/Mono mode.
+
+Plug-ins and balance (`../spec/features/plugins-and-balance.md`):
+- **Plug-ins:** add Audio Unit effects (T-RackS, AmpliTube, TONEX and so on) under **Plug-ins** in a strip's or bus's FX panel. There are 4 slots per strip or bus, each with Edit and bypass.
+- **Balance:** mark strips with ⚖, then press **⚖ Balance** in the footer to measure and match their loudness. The ± buttons under each fader add 1 dB trims, which are held through later balances.
+
+Phase 4 (`../spec/features/control-and-recording.md`):
+- **Recorder:** in the window footer. Arm buses and/or strips, then record; each armed item gets its own file.
+- **File player:** a strip source.
+- **Scenes:** in the footer and the menu bar.
+- **Settings (⌘,):** recording format, a text API on 127.0.0.1:9040, OSC on 127.0.0.1:9000, MIDI learn, and global shortcuts. The API and OSC are off by default.
+
+      printf 'Strip[0].Gain = -10;\nStrip[0].Gain;\n' | nc 127.0.0.1 9040
+
+## Look
+The visual style is shared with Axeio Silicon and follows gm-guitars.net:
+- **Backdrop:** the site's stage-and-bar photo (`Assets/atmosphere-bar.jpg`), dimmed with a vignette.
+- **Surfaces:** obsidian and slate cards with gold hairlines, and Helvetica headings.
+- **Controls:** brushed-metal fader caps with a glowing index line, LED-segment meters, buttons that light up when on,
+  and amber level readouts.
+- **Buses:** A buses are gold, B buses are a smoky blue.
+
+Colours, fonts and surfaces are in `Sources/Mixdeck/Style.swift`; the controls are in `Controls.swift`.
+`Mixdeck --snapshot <dir>` renders the mixer to `<dir>/mixer.png` without starting the engine.
+
+## Layout
+- `Driver/`: the AudioServerPlugIn (C). `make` builds it, and `make test` runs the in-process driver tests.
+- `Sources/CMixEngine`: the real-time engine (C).
+  - `AdaptiveRing`: clock-drift compensation, an adaptive windowed-sinc resampler with a PI controller.
+  - `Mixer`: 8 strips × 6 buses, driven by the virtual driver's clock.
+  - `VoiceFx`: the per-strip and per-bus processing chain.
+- `Sources/AudioIO`: device discovery and process taps for system and app audio (Swift).
+- `Sources/Mixdeck`: the SwiftUI app (mixer window, menu-bar item, settings, launch at login).
+- `Sources/mixdeck-cli`: a command-line front end for tests and soak runs.
+- `Sources/cmix-tests`: offline engine tests. They simulate drifting clocks and need no hardware.
+- `scripts/`: driver install and uninstall (sudo), and `build-app.sh`.
+
+## Build and install
+    make -C Driver && make -C Driver test        # driver + its tests
+    swift build -c release && .build/release/cmix-tests   # 'cmix-tests fx' = voice chain only (seconds)
+    sudo scripts/install-driver.sh               # restarts coreaudiod
+    scripts/install-app.sh [--launch-at-login]   # builds, installs to /Applications, opens
+
+## Command-line checks
+    .build/debug/mixdeck-cli list
+    .build/debug/mixdeck-cli selftest            # routing: tone -> B2 only, read back from all three mics
+    .build/debug/mixdeck-cli run --strip "AXE IO:1,1>B1,A1" --strip "BRIO>B1" --strip "system>B1" --a1 "LU28R55" --seconds 3600 --quiet
+
+Settings: `~/Library/Application Support/Mixdeck/settings.json`.
+
+## Using the mix in Google Meet (and other browser calls)
+Chrome lists the buses as ordinary microphones: `Mixer B1 (Virtual)`, `Mixer B2 (Virtual)` and `Mixer B3 (Virtual)`, at 48 kHz stereo. Checked 2026-11-06 in Chrome on meet.google.com.
+1. In Mixdeck, assign what people should hear to B1. Strips go to B1 by default.
+2. In Meet, open ⋮ → Settings → Audio → Microphone, and choose **Mixer B1 (Virtual)**. Meet keeps using its default microphone (e.g. a webcam) until you change this, and may switch back if that device is unplugged.
+3. If no microphones appear, turn on Google Chrome in System Settings → Privacy & Security → Microphone.
+
+Things to watch:
+- Keep any strip carrying Chrome or System audio off B1. Otherwise the people on the call hear themselves back. Send it to an A bus (your headphones) instead.
+- Meet runs its own noise cancellation, echo cancellation and automatic level control on the microphone. Turn off Settings → Audio → Noise cancellation for music. The level control can't be turned off.
+- Meet sends the microphone in mono, so pan doesn't carry to the call.
+- Use B2 or B3 for a second mix, e.g. speech-only for the call and a full mix for a recording.
+
+## Known limits
+- The app is ad-hoc signed, so macOS may ask for Microphone and System Audio Recording permission again after each rebuild (permission is tied to the exact build). A stable signing identity would stop that.
+- App sources are matched by bundle ID when the strip is set. An app started later needs the strip re-selected.
+- Safari plays audio through a shared WebKit process (`com.apple.WebKit.GPU`), so capture Safari through that entry or use System audio.
+- 48 kHz master rate. A buses use output channels 1-2.
+- Device connections happen on the main thread. If an output device's driver stops responding, the app can hang at launch. Restarting the audio service (`sudo killall coreaudiod`) clears it.
