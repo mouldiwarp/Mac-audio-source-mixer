@@ -10,12 +10,13 @@ struct MixdeckApp: App {
         Window("Mixdeck", id: "mixer") {
             MixerView()
                 .environmentObject(model)
+                .background(MainWindowHook(delegate: delegate))
                 .onAppear { delegate.model = model }
         }
         .windowResizability(.contentSize)   // window follows the strips
 
         MenuBarExtra("Mixdeck", systemImage: "slider.vertical.3") {
-            MenuBarContent().environmentObject(model)
+            MenuBarContent(delegate: delegate).environmentObject(model)
         }
 
         Settings {
@@ -27,11 +28,11 @@ struct MixdeckApp: App {
 struct MenuBarContent: View {
     @EnvironmentObject var model: MixerModel
     @Environment(\.openWindow) private var openWindow
+    let delegate: AppDelegate
 
     var body: some View {
         Button("Show Mixer") {
-            openWindow(id: "mixer")
-            NSApp.activate(ignoringOtherApps: true)
+            delegate.showMixer(open: { openWindow(id: "mixer") })
         }
         Button(model.allVirtualMuted ? "Unmute Virtual Mics (B1–B3)" : "Mute Virtual Mics (B1–B3)") {
             model.toggleVirtualMute()
@@ -53,8 +54,77 @@ struct MenuBarContent: View {
     }
 }
 
+/// Hands the mixer's NSWindow to the app delegate so it can hide to the menu bar.
+struct MainWindowHook: NSViewRepresentable {
+    let delegate: AppDelegate
+    func makeNSView(context: Context) -> NSView {
+        let v = HookView()
+        v.onWindow = { [weak delegate] w in delegate?.adopt(w) }
+        return v
+    }
+    func updateNSView(_ v: NSView, context: Context) {}
+    private final class HookView: NSView {
+        var onWindow: ((NSWindow) -> Void)?
+        override func viewDidMoveToWindow() { if let w = window { onWindow?(w) } }
+    }
+}
+
+/// Runs as a menu-bar utility: the Dock icon shows only while the mixer window is open.
+/// Closing or minimising the window hides it to the menu bar; audio keeps running.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: MixerModel?
+    private weak var mainWindow: NSWindow?
+    private var openMixer: (() -> Void)?
+    private var startHidden = false
+
+    private static func isLoginLaunch() -> Bool {
+        guard let ev = NSAppleEventManager.shared().currentAppleEvent, ev.eventID == kAEOpenApplication else { return false }
+        return ev.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        startHidden = Self.isLoginLaunch() || CommandLine.arguments.contains("--hidden")
+        if startHidden { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    func adopt(_ window: NSWindow) {
+        guard mainWindow !== window else { return }
+        mainWindow = window
+        // The yellow button hides to the menu bar instead of minimising to the Dock.
+        if let mini = window.standardWindowButton(.miniaturizeButton) {
+            mini.target = self
+            mini.action = #selector(hideToTray)
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            NSApp.setActivationPolicy(.accessory)
+            _ = self
+        }
+        if startHidden {
+            startHidden = false
+            DispatchQueue.main.async { [weak self] in self?.hideToTray() }
+        }
+    }
+
+    @objc func hideToTray() {
+        mainWindow?.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// Brings the mixer back, with its Dock icon. `open` recreates the window if it was closed.
+    func showMixer(open: (() -> Void)? = nil) {
+        if let open { openMixer = open }
+        NSApp.setActivationPolicy(.regular)
+        if let w = mainWindow, !w.isVisible { w.makeKeyAndOrderFront(nil) } else if mainWindow == nil { (open ?? openMixer)?() }
+        DispatchQueue.main.async {
+            if let w = self.mainWindow, !w.isVisible { (open ?? self.openMixer)?() }
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        showMixer()
+        return false
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Development aid: write the mixer window to <dir>/mixer.png and quit.
